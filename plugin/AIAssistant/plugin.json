@@ -1,0 +1,8 @@
+{
+  "name": "STE Assistant",
+  "author": "hahaton team",
+  "version": "0.1.0",
+  "description": "Draft AI print preparation assistant with local chat and MCP tools",
+  "api": 5,
+  "i18n-catalog": "steslicer"
+}
