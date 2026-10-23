@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.runtime/
+.superpowers/
+dist/
+*.log
+.env
+.env.*
+!.env.example
+*api_key*
+node_modules/

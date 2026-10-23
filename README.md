@@ -1,1 +1,35 @@
-# hahaton
+# STE Assistant — хакатон
+
+Черновик плагина ИИ-помощника для STE Slicer 7.10 (Python 3.5, PyQt5, API 5).
+
+- [Установка и использование](plugin/README.md).
+- [Контракты и обнаруженные API](docs/API_CONTRACT.md).
+- [Проверка и ограничения](docs/VERIFICATION.md).
+- [Структура результатов для сдачи](results/README.md).
+
+Подключение уже настроено на `https://api.timeweb.ai/v1`, модель `dashscope/qwen3.8-flash`. Введите свой ключ в настройках открытого чата. Ключ не нужно добавлять в файлы или Git.
+
+## Посмотреть интерфейс без STE
+
+```powershell
+python dev.py
+```
+
+Откроется локальный DEMO с примером сцены. Без ключа можно проверить настройки и ручные инструменты. DEMO не выполняет слайсинг, не выдаёт метрики печати и не создаёт 3MF/G-code. Если ввести ключ, сообщения в DEMO отправляются настоящему провайдеру, но инструменты слайсера остаются демонстрационными. Ключ в этом режиме хранится только в памяти процесса.
+
+## Проверка и упаковка
+
+```powershell
+python -m unittest discover -s tests -v
+node --check plugin/AIAssistant/web/app.js
+python tools/package_submission.py
+```
+
+Для проверки на установленном Python STE:
+
+```powershell
+.\tools\run_host_python.ps1 -Script .\tools\host_smoke.py
+.\tools\run_host_python.ps1 -Script .\tools\host_tests.py -Log .runtime\host-tests.log
+```
+
+Архив имеет требуемые верхние папки `plugin/` и `results/`. Перед сдачей добавьте фактические результаты по всем моделям и используйте `--require-results`. Репозиторий не содержит ключей и результатов, выданных за реальные без слайсинга.
