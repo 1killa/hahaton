@@ -2,6 +2,10 @@
 import os
 import sys
 import importlib
+import json
+import tempfile
+from unittest.mock import patch
+from urllib.request import Request, urlopen
 
 root = os.getcwd()
 print("Interpreter:", sys.version)
@@ -50,4 +54,36 @@ assert isinstance(extension, AIAssistant)
 assert extension.getMenuName() == "STE Assistant"
 assert len(extension.getMenuItemList()) == 2
 print("API-5 registration with native Extension class: PASS (test app context)")
+
+# Exercise the menu callback, not just registration. Keep the native Resources
+# resolver and HTTP server real; redirect storage and the external browser only.
+from UM.Resources import Resources
+with tempfile.TemporaryDirectory(prefix="host-chat-", dir=os.path.join(root, ".runtime")) as storage:
+    with patch.object(Resources, "_Resources__data_storage_path", storage), \
+            patch("plugin.AIAssistant.AIAssistant.QDesktopServices") as desktop:
+        server = None
+        try:
+            extension.activateMenuItem("Открыть чат и настройки")
+            server = extension._server
+            with urlopen(server.origin + "/", timeout=5) as response:
+                assert response.status == 200
+                assert b"STE Assistant" in response.read()
+            request = Request(server.origin + "/api/state", headers={"X-AIAssistant-Token": server.token})
+            with urlopen(request, timeout=5) as response:
+                state = json.loads(response.read().decode("utf-8"))
+            assert state["mode"] == "steslicer"
+            assert os.path.isdir(os.path.join(storage, "ste_assistant", "outputs"))
+            assert desktop.openUrl.call_args[0][0].toString() == server.browser_url()
+            extension.activateMenuItem("Открыть чат и настройки")
+            assert extension._server is server
+            assert desktop.openUrl.call_count == 2
+            print("Native menu callback and loopback chat: PASS (test app context)")
+        finally:
+            server = extension._server
+            if server is not None:
+                server.shutdown()
+                extension._server_thread.join(5)
+                server.server_close()
+                server.cleanup_uploads()
+                extension._server = None
 print("HOST_SMOKE_PASSED")

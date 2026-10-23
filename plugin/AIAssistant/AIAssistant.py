@@ -39,7 +39,7 @@ class AIAssistant(Extension):
 
     def showChat(self):
         if self._server is None:
-            runtime = Resources.getStoragePath(Resources.DataStorage, "ste_assistant")
+            runtime = os.path.join(Resources.getDataStoragePath(), "ste_assistant")
             output_dir = os.path.join(runtime, "outputs")
             os.makedirs(output_dir, exist_ok=True)
             adapter = SlicerAdapter(self._app, output_dir)

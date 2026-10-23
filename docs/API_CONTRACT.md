@@ -53,6 +53,7 @@ Snapshot сохраняет **наличие** и значения всех user
 | Возможность | Точный API / источник | Статус до live smoke |
 |---|---|---|
 | Main thread | app.callLater(func,*args) | Требование организаторов; runtime bridge проверить |
+| Каталог данных | os.path.join(Resources.getDataStoragePath(), "ste_assistant") | Подтверждено штатным runtime; Resources.DataStorage в STE 7.10 отсутствует |
 | Backend | app.getBackend() → backend_manager.getCurrentBackend() | Сигнатура подтверждена bytecode |
 | Материал | MachineManager.setMaterialById(self,position,root_material_id) | Подтверждено bytecode |
 | Качество | setQualityGroupByQualityType(self,quality_type) | Подтверждено bytecode |
