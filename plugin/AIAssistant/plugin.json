@@ -1,8 +1,8 @@
 {
   "name": "STE Assistant",
   "author": "hahaton team",
-  "version": "0.1.0",
-  "description": "Draft AI print preparation assistant with local chat and MCP tools",
+  "version": "0.3.0",
+  "description": "Desktop print preparation assistant with saved conversations and native slicing status",
   "api": 5,
   "i18n-catalog": "steslicer"
 }

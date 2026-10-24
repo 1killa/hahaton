@@ -7,6 +7,7 @@ import json
 import os
 import re
 import struct
+import stat
 import threading
 import uuid
 import zipfile
@@ -14,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 from urllib.parse import parse_qs, quote, urlsplit
 
+from .documents import extract_document
 from .rpc import dispatch_rpc
 from .tools import ToolError
 
@@ -21,7 +23,7 @@ MAX_UPLOAD = 24 * 1024 * 1024
 MAX_BODY = 34 * 1024 * 1024
 
 
-def validate_upload(filename, data):
+def _validate_upload(filename, data):
     if (not isinstance(filename, str) or not filename or len(filename) > 180 or
             re.search(r"[\\/\x00-\x1f:]", filename) or filename in (".", "..")):
         raise ToolError("Требуется имя файла без пути.")
@@ -61,10 +63,21 @@ def validate_upload(filename, data):
                 valid = "[content_types].xml" in names and any(name.startswith("3d/") and name.endswith(".model") for name in names)
         except (zipfile.BadZipFile, OSError):
             pass
+    elif extension in (".docx", ".txt"):
+        text = extract_document(filename, data)
+        return extension, "document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if extension == ".docx" else "text/plain", text
+    elif extension == ".doc":
+        raise ToolError("Формат .doc не поддерживается. Сохраните документ как DOCX или TXT.")
     else:
-        raise ToolError("Поддерживаются PNG/JPG и STL/OBJ/3MF.")
+        raise ToolError("Поддерживаются PNG/JPG, STL/OBJ/3MF и документы DOCX/TXT.")
     if not valid:
         raise ToolError("Содержимое файла не соответствует расширению " + extension)
+    return extension, kind, mime, None
+
+
+def validate_upload(filename, data):
+    """Validate an upload while preserving the legacy three-value interface."""
+    extension, kind, mime, _ = _validate_upload(filename, data)
     return extension, kind, mime
 
 
@@ -86,6 +99,10 @@ class AssistantServer(ThreadingMixIn, HTTPServer):
         self.authority = "127.0.0.1:%s" % self.server_port
         self.origin = "http://" + self.authority
         self.tools.upload_resolver = self.resolve_upload
+        # Public-only migration is intentionally local and empty-store-only.
+        legacy = os.path.join(runtime_dir, "legacy-public-chat.json")
+        if hasattr(self.session, "import_public_if_empty"):
+            self.session.import_public_if_empty(legacy)
 
     def browser_url(self):
         return self.origin + "/#token=" + self.token
@@ -129,7 +146,7 @@ class AssistantServer(ThreadingMixIn, HTTPServer):
             data = base64.b64decode(value["data_base64"].encode("ascii"), validate=True)
         except (binascii.Error, UnicodeError, ValueError):
             raise ToolError("Некорректный base64.")
-        extension, kind, mime = validate_upload(value.get("filename"), data)
+        extension, kind, mime, text = _validate_upload(value.get("filename"), data)
         with self._uploads_lock:
             if len(self._uploads) >= 32 or sum(item["size"] for item in self._uploads.values()) + len(data) > 128 * 1024 * 1024:
                 raise ToolError("Достигнут лимит вложений сессии (32 файла / 128 MiB). Перезапустите помощника.")
@@ -138,9 +155,10 @@ class AssistantServer(ThreadingMixIn, HTTPServer):
             with open(path, "wb") as stream:
                 stream.write(data)
             item = {"id": upload_id, "name": value["filename"], "kind": kind,
-                    "mime_type": mime, "path": path, "size": len(data)}
+                    "mime_type": mime, "path": path, "size": len(data),
+                    "text": text, "text_chars": len(text) if text is not None else None}
             self._uploads[upload_id] = item
-        return {key: item[key] for key in ("id", "name", "kind", "mime_type")}
+        return {key: item[key] for key in ("id", "name", "kind", "mime_type", "text_chars")}
 
     def state(self, after):
         result = self.session.state(after)
@@ -150,10 +168,21 @@ class AssistantServer(ThreadingMixIn, HTTPServer):
             except Exception as error:
                 result[name] = {"error": self.config.redact(str(error)), "objects": [],
                                 "state": "unavailable", "result": {"available": False}}
-        result.update({"mode": self.mode, "configured": self.config.public()["has_key"],
+        outputs = []
+        for item in self.tools.outputs:
+            public = {key: value for key, value in item.items() if str(key).casefold() != "path"}
+            if "available" not in public:
+                public["available"] = _safe_output_path(self.tools.output_dir, item.get("path"))
+            outputs.append(public)
+        result.update({"api_version": 3, "mode": self.mode, "configured": self.config.public()["has_key"],
                        "settings": self.config.public(), "requirements": self.tools.requirements(),
-                       "variants": copy_variants(self.tools.variants), "outputs": self.tools.public_outputs()})
-        return result
+                       "variants": copy_variants(self.tools.variants), "outputs": outputs,
+                       "conversation_id": self.session.conversation_id(),
+                       "conversations": self.session.conversations(),
+                       "history_error": (self.session.public_history_error()
+                                         if hasattr(self.session, "public_history_error")
+                                         else getattr(self.session, "history_error", ""))})
+        return strip_private_paths(result)
 
     def cleanup_uploads(self):
         # Only generated files in this instance's private upload directory.
@@ -171,7 +200,54 @@ class AssistantServer(ThreadingMixIn, HTTPServer):
 
 
 def copy_variants(variants):
-    return json.loads(json.dumps(variants, ensure_ascii=False))
+    return strip_private_paths(json.loads(json.dumps(variants, ensure_ascii=False)))
+
+
+def strip_private_paths(value):
+    if isinstance(value, dict):
+        return {key: strip_private_paths(item) for key, item in value.items()
+                if str(key).casefold() != "path"}
+    if isinstance(value, list):
+        return [strip_private_paths(item) for item in value]
+    return value
+
+
+def _safe_output_path(output_dir, path):
+    """Accept only an existing regular file canonically inside output_dir."""
+    if not isinstance(path, str) or not path:
+        return False
+    root = os.path.realpath(output_dir)
+    lexical = os.path.abspath(path)
+    try:
+        if os.path.commonpath([root, lexical]) != root:
+            return False
+    except (AttributeError, ValueError):
+        if not lexical.startswith(root + os.sep):
+            return False
+    current = root
+    try:
+        relative = os.path.relpath(lexical, root)
+        for component in relative.split(os.sep):
+            if component in ("", "."):
+                continue
+            current = os.path.join(current, component)
+            if os.path.islink(current):
+                return False
+            try:
+                if getattr(os.lstat(current), "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+                    return False
+            except OSError:
+                return False
+    except (OSError, ValueError):
+        return False
+    candidate = os.path.realpath(lexical)
+    try:
+        if os.path.commonpath([root, candidate]) != root:
+            return False
+    except (AttributeError, ValueError):
+        if not candidate.startswith(root + os.sep):
+            return False
+    return os.path.isfile(candidate) and not os.path.islink(lexical)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -255,10 +331,11 @@ class Handler(BaseHTTPRequestHandler):
                 elif parsed.path.startswith("/api/download/"):
                     output_id = parsed.path[len("/api/download/"):]
                     item = next((item for item in self.server.tools.outputs if item["id"] == output_id), None)
-                    if not item or os.path.dirname(os.path.realpath(item["path"])) != self.server.tools.output_dir:
+                    if not item or not _safe_output_path(self.server.tools.output_dir, item.get("path")):
                         raise ToolError("Файл результата не найден.")
-                    with open(item["path"], "rb") as stream:
-                        self._headers(200, "application/octet-stream", os.path.getsize(item["path"]),
+                    safe_path = os.path.realpath(item["path"])
+                    with open(safe_path, "rb") as stream:
+                        self._headers(200, "application/octet-stream", os.path.getsize(safe_path),
                                       "attachment; filename*=UTF-8''" + quote(item["filename"], safe=""))
                         while True:
                             chunk = stream.read(65536)
@@ -299,6 +376,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ToolError("Некорректный список вложений.")
                 files = [self.server.resolve_upload(item) for item in ids]
                 self._reply(self.server.session.submit(value.get("text", ""), files), 202)
+            elif path == "/api/continue":
+                self._reply(self.server.session.continue_pending(), 202)
             elif path == "/api/tool":
                 if not isinstance(value.get("name"), str) or not isinstance(value.get("arguments", {}), dict):
                     raise ToolError("Требуются name и arguments.")
@@ -309,10 +388,24 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.session.cancel()
                 self._reply({"cancel_requested": True})
             elif path == "/api/reset":
-                self._exclusive_update(self.server.session.reset)
-                self._reply({"reset": True})
+                reset = getattr(self.server.session, "_reset_locked", self.server.session.reset)
+                conversation_id = self._exclusive_update(reset)
+                self._reply({"reset": True, "conversation_id": conversation_id})
+            elif path == "/api/conversations":
+                create = getattr(self.server.session, "_create_conversation_locked", self.server.session.create_conversation)
+                conversation_id = self._exclusive_update(create)
+                self._reply({"conversation_id": conversation_id}, 201)
+            elif path == "/api/conversations/select":
+                conversation_id = value.get("id")
+                select = getattr(self.server.session, "_select_conversation_locked", self.server.session.select_conversation)
+                selected = self._exclusive_update(lambda: select(conversation_id))
+                self._reply({"conversation_id": selected})
             elif path == "/api/requirements":
-                self._reply(self._exclusive_update(lambda: self.server.tools.set_requirements(value)))
+                def update_requirements():
+                    result = self.server.tools.set_requirements(value)
+                    self.server.session.sync_metadata()
+                    return result
+                self._reply(self._exclusive_update(update_requirements))
             elif path in ("/api/mcp", "/mcp"):
                 session = self.server.session
                 session._begin()

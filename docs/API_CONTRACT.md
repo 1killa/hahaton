@@ -1,4 +1,4 @@
-# Контракты черновика v2
+# Контракты черновика 0.3
 
 Основание: `ПЛАН_ПРОЕКТА.md` в рабочей папке и задание организаторов. Python плагина совместим с 3.5, без внешних зависимостей. Проверенная установленная версия — STE Slicer 7.10.12. API плагинов — 5.
 
@@ -34,12 +34,19 @@ Snapshot сохраняет **наличие** и значения всех user
 {"mode":"demo","busy":false,"configured":false,"settings":{"base_url":"https://api.timeweb.ai/v1","model":"dashscope/qwen3.8-flash","has_key":false},"messages":[],"events":[],"cursor":0,"scene":{"objects":[]},"slice":{"state":"unavailable","progress":0,"result":{"available":false}},"requirements":{"settings":[],"material_id":"","preserve_dimensions":false,"notes":""},"variants":[],"outputs":[],"last_error":""}
 ```
 
-Сообщения `{role:"user"|"assistant",content:string,attachments?:[{name,kind}]}`. События `{id,type:"info"|"error"|"tool_start"|"tool_result",name?,arguments?,result?,message?}`. Для текста использовать textContent. State snapshot — авторитет для истории; события дополняются по id.
+Сообщения `{role:"user"|"assistant",content:string,attachments?:[{name,kind}]}`. События `{id,type:"info"|"error"|"tool_start"|"tool_result",name?,arguments?,result?,message?}`. Markdown сообщений строится безопасными DOM-узлами и textContent; исходный текст не вставляется в innerHTML. State snapshot — авторитет для истории; события дополняются по id внутри выбранного диалога.
+
+Начиная с 0.2 state также содержит `status: idle|running|paused|failed|cancelled`, `can_continue`, `pause_reason: ""|step_limit|time_limit`, `model_steps` (суммарное число запросов к модели в текущем ходе). Событие `run_paused` содержит reason/model_steps/message. В 0.3 журнал и счётчик находятся только во вкладке разработчика.
+
+В 0.3 state содержит `api_version:3`, `conversation_id`, `conversations:[{id,title,created_at,updated_at}]`, `history_error`. Список содержит только метаданные; тело возвращается только для выбранного диалога. `POST /api/conversations {}` создаёт и выбирает новый диалог, `POST /api/conversations/select {id}` выбирает существующий. `/api/reset` создаёт новый диалог с сохранением прежнего. Все операции используют общий operation_lock; занятость — HTTP 400 ToolError. После перезапуска running/paused превращается в interrupted без автоматического продолжения. Восстанавливаются данные диалога, сцена остаётся общей. SPA проверяет api_version перед использованием новых маршрутов.
+
+Хранилище `history/conversations.json` использует атомарную замену и схему 1: максимум 50 диалогов, 32 MiB на запись и 64 MiB на весь UTF-8 файл. Превышение и повреждение не приводят к автоматическому удалению данных. Сохраняются до 200 публичных сообщений, 1000 событий и последние 8 полных ходов контекста провайдера (прежний предел контекста сохранён). Ссылки на старые uploads не импортируются повторно. Доступность результата проверяется по существующему обычному файлу внутри output_dir; недоступные результаты остаются метаданными. Публичный импорт прежнего чата не восстанавливает скрытый контекст провайдера.
 
 - `POST /api/settings {base_url,model,api_key:"",clear_key:false}`: пустой api_key сохраняет прежний. Ответ masked settings. В demo key только в памяти процесса; в плагине STE preferences. Никогда не класть key в local/sessionStorage.
-- `POST /api/upload {filename,data_base64}` → `{id,name,kind:"image"|"model",mime_type}`. До 24 MiB decoded на файл; расширения PNG/JPG/JPEG/STL/OBJ/3MF. В сообщении передавать IDs. Изображения идут в LLM как base64 image_url; модель загружается через инструмент с upload_id.
+- `POST /api/upload {filename,data_base64}` → `{id,name,kind:"image"|"model"|"document",mime_type,text_chars}`. До 24 MiB decoded на файл; расширения PNG/JPG/JPEG/STL/OBJ/3MF/DOCX/TXT. В сообщении передавать IDs. Изображения идут в LLM как base64 image_url; модель загружается через инструмент с upload_id. Документы извлекаются локально (до 120000 символов), сохраняются приватно и передаются отдельным JSON-блоком пользовательского контента. В ответе и событиях нет извлечённого текста/пути; `text_chars` для недокументов — null. Двоичный DOC отклоняется с подсказкой сохранить DOCX/TXT.
 - `POST /api/message {text,attachments:[id]}` → HTTP 202 `{accepted:true}`. Enter отправляет, Shift+Enter новая строка.
-- `POST /api/cancel {}`; `POST /api/reset {}` — reset только когда idle.
+- `POST /api/continue {}` → HTTP 202 `{accepted:true}`: только сохранённая пауза. Новый бюджет — 48 completion requests и 600 секунд; проверки между полными наборами локальных инструментов. Ошибка занятого/неприостановленного агента — HTTP 400. Ход пользователя и завершённые инструменты не повторяются. Отмена и ошибка API очищают возможность continue, но сохраняют завершённые обмены в контексте следующего запроса.
+- `POST /api/cancel {}`; `POST /api/reset {}` — новый диалог только когда помощник свободен.
 - `POST /api/requirements {settings:[{key,value,scope:"global"|"extruder",extruder:0}],material_id:"",preserve_dimensions:false,notes:""}`. Это полная замена. Отсутствующие scope/extruder нормализуются в явно сохранённые global/0. Settings/material/dimensions — жёсткие; notes — рекомендации, которые нельзя считать автоматически проверенными. В UI можно дать key/value fields, checkbox no supports → support_enable=false и preserve dimensions.
 - `POST /api/tool {name,arguments:{...}}` → `{result:...}`. Доступен idle. Для ручных кнопок `get_scene`, `check_5d`, `start_slice`, `save_project {filename:"project.3mf"}`, `export_gcode {filename:"result.gcode"}`, `apply_variant {variant_id}`. Долгие операции отвечают 202 и завершаются событиями/state.
 - `compare_variants {variants:[{label,settings:{layer_height:0.2,infill_sparse_density:20}}]}` — registry tool, 2–3 настоящих слайсинга. Demo отказывает явно. UI запускает запросом чата или manual tool.
@@ -63,7 +70,7 @@ Snapshot сохраняет **наличие** и значения всех user
 | Scale | ScaleOperation(node,scale,set_scale,add_scale,relative_scale,scale_around_point,snap) | Имена аргументов подтверждены; defaults читать при реализации |
 | 3MF проекта | app.getWorkspaceFileHandler().getWriter("3MFWriter").write(stream,nodes) | ThreeMFWorkspaceWriter.py, BinaryMode; не mesh-only writer |
 | G-code | app.getMeshFileHandler().getWriter("GCodeWriter").write(stream,nodes) | GCodeWriter.py; scene.gcode_dict[activeBuildPlate] |
-| Slice | backend.forceSlice(); backendStateChange, processingProgress, slicingStarted | Чтение исходников native backends |
+| Slice | backend.forceSlice(); backendStateChange(Processing/Done), processingProgress | Проверено классами/bytecode STE 7.10: slicingStarted отсутствует; Done предшествует финальной обработке G-code |
 | PrintInformation | currentPrintTime.getDisplayString(DurationFormat.Seconds), materialLengths, materialWeights | QML + bytecode; отсутствующие поля не выдумывать |
 
 Импорт полного MachineManager вне приложения выявил циклические импорты; это не подтверждение поломки плагина. Для фактической регистрации нужен отдельный smoke внутри STE.

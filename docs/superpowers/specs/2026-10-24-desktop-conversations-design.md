@@ -1,0 +1,15 @@
+# STE Assistant 0.3: desktop conversations and native slicing
+
+User authority: eleven annotated browser comments at 1159 x 668, plus the earlier DOCX/TXT and PC-only requirements. Preserve the current dirty checkout and native project. No paid/model requests, Git mutations, automatic STE restart or re-slice.
+
+The interface has top tabs Chat, Scene and Developers. Chat has persistent local conversation history on the left, readable Markdown messages, a conditions dialog and requirement chips beside the composer, with outputs/actions on the right. Scene has an object selector and details. Developers owns the full technical journal and model-step count. Remove the brand S mark, subtitle and former left requirements form/save button. Only desktop widths 1024–1920 are in scope.
+
+Native completion accepts current-generation Processing or an actual optional slicingStarted signal, followed by explicit Done, fresh nonempty G-code and the correct plate. Done records intent; final fingerprints are captured after the native callback finishes, because STE appends final G-code after emitting Done. Progress alone cannot complete a job. Existing completed-generation scene/settings/G-code guards remain. Treat missing setting bounds as unbounded and normalize present native numeric bounds while keeping incoming values strictly numeric.
+
+Conversations persist locally as one atomic schema-1 JSON file, at most 50 records, 32 MiB per record and 64 MiB total in UTF-8. Preserve complete user/provider/tool checkpoints, public messages/events, pins, variants and valid output metadata. GET state exposes api_version 3, selected ID and metadata-only history. Create/select/reset/import use the existing operation lock; busy uses HTTP 400 ToolError. Reset creates a new conversation. Recovered running/paused records become interrupted without resume/replay. Native scene is shared between chats and is never restored from history.
+
+Apply known config redaction and recursively exclude exact case-normalized credential/config/header field names. Retain ordinary IDs. Store errors preserve the old file and RAM data and expose history_error. Downloads require existing regular canonical files inside output_dir and reject symlink/reparse escapes. Legacy migration imports public data only into an empty store; it does not claim reconstruction of provider history.
+
+Markdown is DOM/textContent based, with no model text assigned to innerHTML. Support common prose, headings, lists, code, quotes and simple tables. Raw HTML stays literal, images/media do not fetch, and links accept normalized absolute http(s) only. Frontend checks api_version before new routes and explains when the installed Python backend requires a controlled restart.
+
+Verification covers native lifecycle fixtures, history failure/recovery/redaction/locking/output containment, Python 3.5, safe Markdown, all eleven comments and desktop layouts. Root installs checked source with backup/hashes and packages it. Only activating new Python modules requires a user-controlled STE restart.

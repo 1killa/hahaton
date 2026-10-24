@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 from plugin.AIAssistant.agent.config import ConfigStore
 from plugin.AIAssistant.agent.core import AgentSession
 from plugin.AIAssistant.agent.server import AssistantServer
-from plugin.AIAssistant.agent.tools import ToolRegistry
+from plugin.AIAssistant.agent.tools import ToolError, ToolRegistry
 from tests.test_core import TinyAdapter
 
 
@@ -67,6 +67,37 @@ class ServerTests(unittest.TestCase):
             upload = json.loads(response.read().decode("utf-8"))
         self.assertEqual(upload["kind"], "model")
         self.assertNotIn("path", upload)
+
+    def test_document_upload_caches_private_text_and_public_metadata_only(self):
+        content = "Требование: сохранить габариты.".encode("utf-8")
+        with self.request("/api/upload", {
+                "filename": "requirements.txt",
+                "data_base64": base64.b64encode(content).decode("ascii")}) as response:
+            upload = json.loads(response.read().decode("utf-8"))
+        self.assertEqual(upload["kind"], "document")
+        self.assertEqual(upload["mime_type"], "text/plain")
+        self.assertEqual(upload["text_chars"], len("Требование: сохранить габариты."))
+        self.assertNotIn("path", upload)
+        self.assertNotIn("text", upload)
+        self.assertEqual(self.server.resolve_upload(upload["id"])["text"], content.decode("utf-8"))
+        self.assertEqual(self.server.resolve_upload(upload["id"])["text_chars"], upload["text_chars"])
+
+    def test_document_upload_cannot_be_loaded_as_model(self):
+        content = b"specification"
+        upload = self.server.upload({
+            "filename": "requirements.txt",
+            "data_base64": base64.b64encode(content).decode("ascii")})
+        with self.assertRaises(ToolError):
+            self.tools.call("load_model", {"upload_id": upload["id"]})
+
+    def test_legacy_doc_is_rejected_with_save_as_hint(self):
+        with self.assertRaises(HTTPError) as raised:
+            self.request("/api/upload", {
+                "filename": "requirements.doc",
+                "data_base64": base64.b64encode(b"legacy").decode("ascii")})
+        self.assertEqual(raised.exception.code, 400)
+        body = raised.exception.read().decode("utf-8")
+        self.assertIn("DOCX", body)
 
     def test_settings_do_not_echo_key_and_spa_is_served(self):
         with self.request("/api/settings", {"api_key": "my-test-secret"}) as response:

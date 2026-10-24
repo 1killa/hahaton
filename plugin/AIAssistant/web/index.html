@@ -1,228 +1,27 @@
 <!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>STE Assistant — AI Slicer Workspace</title>
-  <link rel="stylesheet" href="/style.css">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="dark"><title>STE Assistant</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div class="app-shell">
-    <header class="topbar">
-      <div class="brand-block">
-        <div class="brand-mark" aria-hidden="true">S</div>
-        <div>
-          <div class="brand-name">STE Assistant</div>
-          <div class="brand-subtitle">AI workspace for precise printing</div>
-        </div>
-      </div>
-      <div class="topbar-actions">
-        <div class="connection-pill" id="connection-pill" title="Режим соединения">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="connection-label">CONNECTING</span>
-        </div>
-        <div class="mode-pill" id="mode-pill">DEMO</div>
-        <button class="icon-button settings-button" id="open-settings" type="button" aria-label="Открыть настройки" title="Настройки">
-          <span aria-hidden="true">⚙</span>
-        </button>
-      </div>
-    </header>
+    <header class="topbar"><div class="brand-block"><div class="brand-name">STE Assistant</div></div><nav class="top-tabs" aria-label="Разделы рабочего пространства"><button class="top-tab active" type="button" data-tab="chat">Чат</button><button class="top-tab" type="button" data-tab="scene">Сцена</button><button class="top-tab" type="button" data-tab="developers">Разработчикам</button></nav><div class="topbar-actions"><div class="connection-pill" id="connection-pill" title="Режим соединения"><span class="status-dot" aria-hidden="true"></span><span id="connection-label">ПОДКЛЮЧЕНИЕ</span></div><div class="mode-pill" id="mode-pill">DEMO</div><button class="icon-button settings-button" id="open-settings" type="button" aria-label="Открыть настройки" title="Настройки"><span aria-hidden="true">⚙</span></button></div></header>
+    <div class="compatibility-notice" id="compatibility-notice" role="status" hidden><span class="notice-icon" aria-hidden="true">!</span><span id="compatibility-text">Обновление установлено. Сохраните проект и перезапустите STE Slicer, затем откройте помощника из меню.</span></div>
 
-    <main class="workspace">
-      <aside class="panel context-panel" aria-label="Контекст проекта">
-        <section class="panel-section scene-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">LIVE CONTEXT</div>
-              <h2>Сцена</h2>
-            </div>
-            <button class="ghost-button compact" id="refresh-scene" type="button" data-tool="get_scene" aria-label="Обновить сцену" title="Обновить сцену">↻</button>
-          </div>
-          <div class="scene-summary" id="scene-summary">
-            <div class="empty-state compact-empty"><span class="empty-icon">◇</span><span>Сцена ещё не загружена</span></div>
-          </div>
-          <div class="scene-meta" id="scene-meta"></div>
-        </section>
-
-        <section class="panel-section pinned-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">PINNED CONSTRAINTS</div>
-              <h2>Требования</h2>
-            </div>
-            <span class="section-count" id="requirements-count">0</span>
-          </div>
-          <div class="requirements-form" id="requirements-form">
-            <div class="field-row">
-              <label for="material-id">ID материала <span class="optional-label">опционально</span></label>
-              <input id="material-id" type="text" placeholder="Точный ID из профилей STE">
-              <div class="helper-text">Укажите идентификатор из списка профилей, а не только название материала.</div>
-            </div>
-            <label class="check-row" for="preserve-dimensions">
-              <input id="preserve-dimensions" type="checkbox">
-              <span>Сохранить размеры детали</span>
-            </label>
-            <label class="check-row" for="no-supports">
-              <input id="no-supports" type="checkbox">
-              <span>Без поддержек</span>
-            </label>
-            <div class="settings-rows" id="pinned-settings" aria-label="Закреплённые параметры"></div>
-            <button class="outline-button full-width" id="add-setting" type="button">+ Добавить параметр</button>
-            <div class="field-row notes-field">
-              <label for="requirements-notes">Пожелания <span class="optional-label">совет</span></label>
-              <textarea id="requirements-notes" rows="2" placeholder="Например: приоритет — аккуратная поверхность"></textarea>
-            </div>
-            <button class="primary-button full-width" id="save-requirements" type="button">Закрепить требования</button>
-            <div class="helper-text">Жёсткие условия проверяются перед изменением настроек.</div>
-          </div>
-        </section>
-      </aside>
-
-      <section class="panel chat-panel" aria-label="Чат с STE Assistant">
-        <div class="chat-header">
-          <div>
-            <div class="eyebrow">ASSISTANT SESSION</div>
-            <h1>Подготовка печати</h1>
-          </div>
-          <div class="chat-header-actions">
-            <span class="busy-label" id="busy-label" hidden><span class="spinner small"></span>В работе</span>
-            <button class="ghost-button cancel-button" id="cancel-operation" type="button" hidden>Остановить</button>
-            <button class="ghost-button" id="reset-chat" type="button">Новый диалог</button>
-          </div>
-        </div>
-
-        <div class="chat-body" id="chat-body" aria-live="polite">
-          <div class="welcome-card" id="welcome-card">
-            <div class="welcome-icon">✦</div>
-            <div>
-              <h2>Настроим деталь вместе</h2>
-              <p>Опишите задачу, прикрепите модель — я сверю сцену, предложу настройки и покажу каждый шаг.</p>
-            </div>
-          </div>
-          <div class="starter-grid" id="starter-grid">
-            <button class="starter-card" type="button" data-starter="Подготовь эту деталь для прочного кронштейна из PETG">
-              <span class="starter-icon">⌁</span><span><strong>Прочный кронштейн</strong><small>PETG и надёжная ориентация</small></span>
-            </button>
-            <button class="starter-card" type="button" data-starter="Сравни быстрый и качественный варианты печати">
-              <span class="starter-icon">⇄</span><span><strong>Сравнить варианты</strong><small>Время, материал и компромиссы</small></span>
-            </button>
-            <button class="starter-card" type="button" data-starter="Проверь подготовку этой модели к 5D печати">
-              <span class="starter-icon">◌</span><span><strong>Проверка 5D</strong><small>Режим и геометрические факты</small></span>
-            </button>
-          </div>
-          <div class="messages" id="messages"></div>
-          <div class="event-log" id="event-log"></div>
-          <div class="typing-indicator" id="typing-indicator" hidden>
-            <span class="avatar assistant-avatar">S</span>
-            <div class="typing-bubble"><span></span><span></span><span></span></div>
-          </div>
-        </div>
-
-        <div class="composer-wrap">
-          <div class="composer-attachments" id="composer-attachments" hidden></div>
-          <form class="composer" id="composer-form">
-            <button class="attach-button" id="attach-trigger" type="button" aria-label="Прикрепить файл" title="PNG, JPG, STL, OBJ, 3MF">＋</button>
-            <input id="file-input" type="file" accept=".png,.jpg,.jpeg,.stl,.obj,.3mf,image/png,image/jpeg" multiple hidden>
-            <textarea id="message-input" rows="1" placeholder="Опишите задачу для печати…" aria-label="Сообщение"></textarea>
-            <button class="send-button" id="send-button" type="submit" aria-label="Отправить сообщение" title="Отправить">↑</button>
-          </form>
-          <div class="composer-footer"><span>Enter — отправить · Shift + Enter — новая строка</span><span>STE Slicer · API v5</span></div>
-        </div>
-      </section>
-
-      <aside class="panel output-panel" aria-label="Результаты и действия">
-        <section class="panel-section actions-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">TOOLS</div>
-              <h2>Действия</h2>
-            </div>
-          </div>
-          <div class="tool-grid">
-            <button class="tool-button" type="button" data-tool="check_5d"><span class="tool-symbol">◌</span><span>Проверить 5D</span></button>
-            <button class="tool-button" type="button" data-tool="start_slice"><span class="tool-symbol">▶</span><span>Запустить слайсинг</span></button>
-            <button class="tool-button" type="button" data-tool="save_project"><span class="tool-symbol">▣</span><span>Сохранить 3MF</span></button>
-            <button class="tool-button" type="button" data-tool="export_gcode"><span class="tool-symbol">⇩</span><span>Экспорт G-code</span></button>
-          </div>
-        </section>
-
-        <section class="panel-section progress-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">SLICE STATUS</div>
-              <h2>Слайсинг</h2>
-            </div>
-            <span class="status-badge" id="slice-state">UNAVAILABLE</span>
-          </div>
-          <div class="progress-track"><div class="progress-fill" id="slice-progress"></div></div>
-          <div class="progress-caption"><span id="slice-progress-text">Ожидание запуска</span><span id="slice-percent">—</span></div>
-          <div class="metrics" id="slice-metrics"></div>
-        </section>
-
-        <section class="panel-section variants-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">OPTIONS</div>
-              <h2>Варианты</h2>
-            </div>
-            <span class="section-count" id="variants-count">0</span>
-          </div>
-          <div class="variants-list" id="variants-list"><div class="empty-state compact-empty"><span class="empty-icon">⇄</span><span>Попросите сравнить 2–3 режима</span></div></div>
-        </section>
-
-        <section class="panel-section outputs-section">
-          <div class="section-heading">
-            <div>
-              <div class="eyebrow">FILES</div>
-              <h2>Файлы</h2>
-            </div>
-            <span class="section-count" id="outputs-count">0</span>
-          </div>
-          <div class="outputs-list" id="outputs-list"><div class="empty-state compact-empty"><span class="empty-icon">⇩</span><span>Готовые файлы появятся здесь</span></div></div>
-        </section>
-      </aside>
+    <main class="tab-panel active" id="tab-chat" data-panel="chat">
+      <aside class="panel conversations-panel" aria-label="Сохранённые диалоги"><div class="sidebar-header"><div><div class="eyebrow">ДИАЛОГИ</div><h2>Ваши чаты</h2></div><button class="primary-button compact-button" id="new-conversation" type="button">Новый</button></div><div class="conversation-list" id="conversation-list"><div class="empty-state compact-empty"><span>Загрузка диалогов…</span></div></div><div class="sidebar-note">Диалоги сохраняются локально и доступны после перезапуска плагина.</div></aside>
+      <section class="panel chat-panel" aria-label="Чат с STE Assistant"><div class="chat-header"><div><div class="eyebrow">СЕССИЯ ПОМОЩНИКА</div><h1>Подготовка печати</h1></div><div class="chat-header-actions"><div class="session-status" id="session-status" role="status" aria-live="polite">Готов к задаче</div><div class="session-note" id="session-note" role="note" hidden></div><span class="busy-label" id="busy-label" hidden><span class="spinner small"></span>В работе</span><button class="ghost-button cancel-button" id="cancel-operation" type="button" hidden>Остановить</button></div></div><div class="chat-body" id="chat-body" aria-live="polite"><div class="welcome-card" id="welcome-card"><div class="welcome-icon">✦</div><div><h2>Настроим деталь вместе</h2><p>Опишите задачу или прикрепите модель — я сверю сцену и покажу каждый шаг.</p></div></div><div class="starter-grid" id="starter-grid"><button class="starter-card" type="button" data-starter="Подготовь эту деталь для прочного кронштейна из PETG"><span class="starter-icon">⌁</span><span><strong>Прочный кронштейн</strong><small>PETG и надёжная ориентация</small></span></button><button class="starter-card" type="button" data-starter="Сравни быстрый и качественный варианты печати"><span class="starter-icon">⇄</span><span><strong>Сравнить варианты</strong><small>Время, материал и компромиссы</small></span></button><button class="starter-card" type="button" data-starter="Проверь подготовку этой модели к 5D печати"><span class="starter-icon">◌</span><span><strong>Проверка 5D</strong><small>Режим и геометрические факты</small></span></button></div><div class="messages" id="messages"></div><div class="typing-indicator" id="typing-indicator" hidden><span class="avatar assistant-avatar">AI</span><div class="typing-bubble"><span></span><span></span><span></span></div></div></div><div class="composer-wrap"><section class="continue-card" id="continue-card" hidden aria-labelledby="continue-title"><div class="continue-card-copy"><div class="continue-card-title" id="continue-title">Задача приостановлена</div><p id="continue-reason">Можно продолжить с сохранённого шага.</p></div><button class="primary-button" id="continue-operation" type="button">Продолжить</button></section><div class="composer-tools"><div class="requirements-chips" id="requirements-chips" aria-label="Условия диалога"></div><button class="outline-button conditions-button" id="open-requirements" type="button">Условия</button></div><div class="composer-attachments" id="composer-attachments" hidden></div><div class="upload-status" id="upload-status" role="status" aria-live="polite" hidden></div><form class="composer" id="composer-form"><button class="attach-button" id="attach-trigger" type="button" aria-label="Прикрепить файл" title="DOCX, TXT, PNG, JPG, STL, OBJ, 3MF">＋</button><input id="file-input" type="file" accept=".docx,.txt,.png,.jpg,.jpeg,.stl,.obj,.3mf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,image/png,image/jpeg" multiple hidden><textarea id="message-input" rows="1" placeholder="Опишите задачу для печати…" aria-label="Сообщение"></textarea><button class="send-button" id="send-button" type="submit" aria-label="Отправить сообщение" title="Отправить">↑</button></form><div class="composer-footer"><span>Enter — отправить · Shift + Enter — новая строка</span><span>STE Slicer</span></div></div></section>
+      <aside class="panel output-panel" aria-label="Результаты и действия"><section class="panel-section actions-section"><div class="section-heading"><div><div class="eyebrow">ДЕЙСТВИЯ</div><h2>Действия</h2></div></div><div class="tool-grid"><button class="tool-button" type="button" data-tool="check_5d"><span class="tool-symbol">◌</span><span>Проверить 5D</span></button><button class="tool-button" type="button" data-tool="start_slice"><span class="tool-symbol">▶</span><span>Запустить слайсинг</span></button><button class="tool-button" type="button" data-tool="save_project"><span class="tool-symbol">▣</span><span>Сохранить 3MF</span></button><button class="tool-button" type="button" data-tool="export_gcode"><span class="tool-symbol">⇩</span><span>Экспорт G-code</span></button></div></section><section class="panel-section progress-section"><div class="section-heading"><div><div class="eyebrow">СТАТУС СЛАЙСИНГА</div><h2>Слайсинг</h2></div><span class="status-badge" id="slice-state">UNAVAILABLE</span></div><div class="progress-track"><div class="progress-fill" id="slice-progress"></div></div><div class="progress-caption"><span id="slice-progress-text">Ожидание запуска</span><span id="slice-percent">—</span></div><div class="metrics" id="slice-metrics"></div></section><section class="panel-section variants-section"><div class="section-heading"><div><div class="eyebrow">ВАРИАНТЫ</div><h2>Варианты</h2></div><span class="section-count" id="variants-count">0</span></div><div class="variants-list" id="variants-list"><div class="empty-state compact-empty"><span>Попросите сравнить 2–3 режима</span></div></div></section><section class="panel-section outputs-section"><div class="section-heading"><div><div class="eyebrow">ФАЙЛЫ</div><h2>Файлы</h2></div><span class="section-count" id="outputs-count">0</span></div><div class="outputs-list" id="outputs-list"><div class="empty-state compact-empty"><span>Готовые файлы появятся здесь</span></div></div></section></aside>
     </main>
+
+    <main class="tab-panel scene-tab" id="tab-scene" data-panel="scene" hidden><section class="panel scene-workspace"><div class="scene-topline"><div><div class="eyebrow">ОБЩАЯ СЦЕНА</div><h1>Сцена печати</h1><p class="tab-intro">Сцена общая для всех диалогов. Выбранный объект показывает факты, полученные от STE Slicer.</p></div><button class="ghost-button" id="refresh-scene" type="button" data-tool="get_scene">↻ Обновить</button></div><div class="scene-selector-row"><label for="scene-object-select">Объект</label><select id="scene-object-select"><option value="">Сцена ещё не загружена</option></select></div><div class="scene-details" id="scene-details"><div class="empty-state compact-empty"><span>Выберите объект, чтобы увидеть размеры и идентификатор.</span></div></div><div class="scene-meta" id="scene-meta"></div><p class="scene-shared-note">Смена диалога не восстанавливает сцену из истории: здесь всегда показано текущее состояние STE Slicer.</p></section></main>
+    <main class="tab-panel developers-tab" id="tab-developers" data-panel="developers" hidden><section class="panel developer-workspace"><div class="developer-header"><div><div class="eyebrow">ДИАГНОСТИКА</div><h1>Разработчикам</h1><p class="tab-intro">Технический журнал вынесен из переписки. Записи читаются независимо от чата.</p></div><div class="developer-actions"><span class="model-steps" id="developer-model-steps">Шаги модели: 0</span><button class="outline-button" id="copy-events-json" type="button">Копировать JSON</button></div></div><div class="developer-toolbar"><label for="event-filter">Фильтр журнала</label><input id="event-filter" type="search" placeholder="тип, инструмент или текст"><span class="event-log-count" id="event-log-count">0</span></div><div class="event-log developer-log" id="event-log"></div></section></main>
   </div>
 
   <div class="toast-region" id="toast-region" aria-live="assertive"></div>
-
-  <dialog class="settings-dialog" id="settings-dialog">
-    <form method="dialog" class="settings-card" id="settings-form">
-      <div class="dialog-header">
-        <div><div class="eyebrow">CONNECTION</div><h2>Настройки подключения</h2></div>
-        <button class="icon-button" type="button" id="close-settings" aria-label="Закрыть">×</button>
-      </div>
-      <p class="dialog-intro">Ключ используется только для текущего подключения. Он не сохраняется в браузере.</p>
-      <div class="field-row">
-        <label for="base-url">Base URL</label>
-        <input id="base-url" type="url" value="https://api.timeweb.ai/v1" autocomplete="url">
-      </div>
-      <div class="field-row">
-        <label for="model-name">Модель</label>
-        <input id="model-name" type="text" value="dashscope/qwen3.8-flash" autocomplete="off">
-      </div>
-      <div class="field-row">
-        <label for="api-key">API key <span class="optional-label" id="key-status">не задан</span></label>
-        <input id="api-key" type="password" placeholder="Вставьте ключ для подключения" autocomplete="new-password">
-      </div>
-      <label class="check-row" for="clear-key"><input id="clear-key" type="checkbox"><span>Удалить сохранённый ключ</span></label>
-      <div class="dialog-footer">
-        <span class="helper-text">Сейчас: <strong id="settings-mode">DEMO</strong></span>
-        <button class="primary-button" id="save-settings" type="submit">Сохранить подключение</button>
-      </div>
-    </form>
-  </dialog>
-
-  <template id="setting-row-template">
-    <div class="setting-row">
-      <input class="setting-key" type="text" placeholder="Ключ, например layer_height">
-      <input class="setting-value" type="text" placeholder="Значение">
-      <select class="setting-scope" aria-label="Область настройки"><option value="global">global</option><option value="extruder">extruder</option></select>
-      <input class="setting-extruder" type="number" min="0" step="1" value="0" aria-label="Номер экструдера" hidden>
-      <button class="remove-setting" type="button" aria-label="Удалить параметр">×</button>
-    </div>
-  </template>
+  <dialog class="settings-dialog requirements-dialog" id="requirements-dialog"><form method="dialog" class="settings-card requirements-card" id="requirements-form"><div class="dialog-header"><div><div class="eyebrow">УСЛОВИЯ ДИАЛОГА</div><h2>Что нужно сохранить</h2></div><button class="icon-button" type="button" id="close-requirements" aria-label="Закрыть">×</button></div><p class="dialog-intro">Жёсткие условия передаются помощнику как закреплённые настройки. Пожелания остаются советом и не блокируют изменение параметров.</p><div class="field-row"><label for="material-id">ID материала <span class="optional-label">опционально</span></label><input id="material-id" type="text" placeholder="Точный ID из профилей STE"><div class="helper-text">Используйте идентификатор профиля, а не только название материала.</div></div><label class="check-row" for="preserve-dimensions"><input id="preserve-dimensions" type="checkbox"><span>Сохранить размеры детали</span></label><label class="check-row" for="no-supports"><input id="no-supports" type="checkbox"><span>Без поддержек</span></label><div class="settings-rows" id="pinned-settings" aria-label="Закреплённые параметры"></div><button class="outline-button full-width" id="add-setting" type="button">+ Добавить параметр</button><div class="field-row notes-field"><label for="requirements-notes">Пожелания <span class="optional-label">совет</span></label><textarea id="requirements-notes" rows="2" placeholder="Например: приоритет — аккуратная поверхность"></textarea></div><div class="dialog-footer"><span class="helper-text">Закреплённых условий: <strong id="requirements-count">0</strong></span><button class="primary-button" id="save-requirements" type="submit">Добавить в диалог</button></div></form></dialog>
+  <dialog class="settings-dialog" id="settings-dialog"><form method="dialog" class="settings-card" id="settings-form"><div class="dialog-header"><div><div class="eyebrow">ПОДКЛЮЧЕНИЕ</div><h2>Настройки подключения</h2></div><button class="icon-button" type="button" id="close-settings" aria-label="Закрыть">×</button></div><p class="dialog-intro">Ключ используется только для текущего подключения. Он не сохраняется в браузере.</p><div class="field-row"><label for="base-url">Base URL</label><input id="base-url" type="url" value="https://api.timeweb.ai/v1" autocomplete="url"></div><div class="field-row"><label for="model-name">Модель</label><input id="model-name" type="text" value="dashscope/qwen3.8-flash" autocomplete="off"></div><div class="field-row"><label for="api-key">API key <span class="optional-label" id="key-status">не задан</span></label><input id="api-key" type="password" placeholder="Вставьте ключ для подключения" autocomplete="new-password"></div><label class="check-row" for="clear-key"><input id="clear-key" type="checkbox"><span>Удалить сохранённый ключ</span></label><div class="dialog-footer"><span class="helper-text">Сейчас: <strong id="settings-mode">DEMO</strong></span><button class="primary-button" id="save-settings" type="submit">Сохранить подключение</button></div></form></dialog>
+  <template id="setting-row-template"><div class="setting-row"><input class="setting-key" type="text" placeholder="Ключ, например layer_height"><input class="setting-value" type="text" placeholder="Значение"><select class="setting-scope" aria-label="Область настройки"><option value="global">global</option><option value="extruder">extruder</option></select><input class="setting-extruder" type="number" min="0" step="1" value="0" aria-label="Номер экструдера" hidden><button class="remove-setting" type="button" aria-label="Удалить параметр">×</button></div></template>
   <script src="/app.js"></script>
 </body>
 </html>

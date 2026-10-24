@@ -157,6 +157,78 @@ class FakeBackend(object):
         self.backendStateChange.emit("notstarted")
 
 
+class NativeLikeBackend(object):
+    """STE 7.10-shaped backend: no slicingStarted signal is exposed."""
+
+    def __init__(self, mode="valid"):
+        self.processingProgress = Signal()
+        self.backendStateChange = Signal()
+        self.printDurationMessage = Signal()
+        self.scene = None
+        self.mode = mode
+        self.force_calls = 0
+        self.stop_calls = 0
+
+    def forceSlice(self):
+        self.force_calls += 1
+        if self.mode == "progress_only":
+            self.processingProgress.emit(1.0)
+            if self.scene is not None:
+                self.scene.gcode_dict[0] = ["fresh-gcode"]
+            return True
+        if self.mode == "done_only":
+            self.backendStateChange.emit("Done")
+            return True
+        self.backendStateChange.emit("Processing")
+        if self.mode == "unchanged":
+            pass
+        elif self.mode == "empty":
+            self.scene.gcode_dict[0] = []
+        else:
+            self.scene.gcode_dict[0] = ["fresh-gcode"]
+        if self.mode == "wrong_plate":
+            self.build_plate_model.activeBuildPlate = 1
+        self.backendStateChange.emit("Done")
+        if self.mode == "valid" and self.scene is not None:
+            # Native STE appends post-processed lines after Done.
+            self.scene.gcode_dict[0].append("postprocessed")
+        return True
+
+    def stopSlicing(self):
+        self.stop_calls += 1
+        self.backendStateChange.emit("NotStarted")
+
+
+class NativeBackendState(object):
+    NotStarted = 1
+    Processing = 2
+    Done = 3
+    Error = 4
+    Disabled = 5
+
+
+class EnumNativeLikeBackend(NativeLikeBackend):
+    def forceSlice(self):
+        self.force_calls += 1
+        self.backendStateChange.emit(NativeBackendState.Processing)
+        self.scene.gcode_dict[0] = ["fresh-gcode"]
+        self.backendStateChange.emit(NativeBackendState.Done)
+        self.scene.gcode_dict[0].append("postprocessed")
+        return True
+
+
+class AsyncNativeLikeBackend(NativeLikeBackend):
+    def forceSlice(self):
+        self.force_calls += 1
+        self.backendStateChange.emit("Processing")
+        return True
+
+    def finish(self):
+        self.scene.gcode_dict[0] = ["fresh-gcode"]
+        self.backendStateChange.emit("Done")
+        self.scene.gcode_dict[0].append("postprocessed")
+
+
 class FakeDuration(object):
     last_format = None
 
@@ -429,7 +501,138 @@ class SlicerAdapterTests(unittest.TestCase):
         adapter._slice_started_at -= 31.0
         status = adapter.call("get_slice_status", {})
         self.assertEqual(status["state"], "error")
-        self.assertIn("no slicingStarted", status["error"])
+        self.assertIn("no Processing", status["error"])
+
+    def test_native_processing_done_postprocessing_completes_without_slicing_started(self):
+        app = FakeApp()
+        app.backend = NativeLikeBackend("valid")
+        app.backend.scene = app.controller.scene
+        app.backend.build_plate_model = app.multi_build_plate_model
+        adapter = SlicerAdapter(app, self.tmp)
+        started = adapter.call("start_slice", {})
+        self.assertEqual(started["state"], "done")
+        self.assertEqual(adapter.call("get_slice_status", {})["state"], "done")
+        exported = adapter.call("export_gcode", {"filename": "native.gcode"})
+        self.assertTrue(exported["ok"])
+
+    def test_repeated_native_generations_with_same_content_both_export(self):
+        app = FakeApp()
+        app.backend = NativeLikeBackend("valid")
+        app.backend.scene = app.controller.scene
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertEqual(adapter.call("start_slice", {})["state"], "done")
+        self.assertTrue(adapter.call("export_gcode", {"filename": "native-first.gcode"})["ok"])
+        self.assertEqual(adapter.call("start_slice", {})["state"], "done")
+        self.assertTrue(adapter.call("export_gcode", {"filename": "native-second.gcode"})["ok"])
+
+    def test_native_done_finalizes_on_later_status_after_postprocessing(self):
+        app = FakeApp()
+        app.backend = AsyncNativeLikeBackend()
+        app.backend.scene = app.controller.scene
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertEqual(adapter.call("start_slice", {})["state"], "running")
+        self.assertEqual(adapter.call("get_slice_status", {})["state"], "running")
+        app.backend.finish()
+        self.assertEqual(adapter.call("get_slice_status", {})["state"], "done")
+        self.assertTrue(adapter.call("export_gcode", {"filename": "async-native.gcode"})["ok"])
+
+    def test_native_completion_requires_processing_done_and_nonempty_fresh_gcode(self):
+        for mode in ("done_only", "progress_only", "unchanged", "empty"):
+            app = FakeApp()
+            app.backend = NativeLikeBackend(mode)
+            app.backend.scene = app.controller.scene
+            app.backend.build_plate_model = app.multi_build_plate_model
+            adapter = SlicerAdapter(app, self.tmp)
+            self.assertNotEqual(adapter.call("start_slice", {})["state"], "done", mode)
+            self.assertNotEqual(adapter.call("get_slice_status", {})["state"], "done", mode)
+            self.assertEqual(adapter.call("export_gcode", {"filename": mode + ".gcode"})["code"],
+                             "UNAVAILABLE")
+
+    def test_native_completion_rejects_wrong_active_plate(self):
+        app = FakeApp()
+        app.backend = NativeLikeBackend("wrong_plate")
+        app.backend.scene = app.controller.scene
+        app.backend.build_plate_model = app.multi_build_plate_model
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertNotEqual(adapter.call("start_slice", {})["state"], "done")
+        self.assertEqual(adapter.call("export_gcode", {"filename": "wrong-plate.gcode"})["code"],
+                         "UNAVAILABLE")
+
+    def test_native_bounds_accept_none_and_numeric_strings_but_reject_string_input(self):
+        app = FakeApp()
+        app.manager.stack.definitions["layer_height"] = {
+            "type": "float", "minimum_value": None, "maximum_value": "1.0",
+        }
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertTrue(adapter.call("set_setting", {
+            "key": "layer_height", "value": 0.0001, "scope": "global",
+        })["ok"])
+        self.assertEqual(adapter.call("set_setting", {
+            "key": "layer_height", "value": 1.1, "scope": "global",
+        })["code"], "INVALID_ARGUMENTS")
+        self.assertEqual(adapter.call("set_setting", {
+            "key": "layer_height", "value": "0.2", "scope": "global",
+        })["code"], "INVALID_ARGUMENTS")
+        self.assertEqual(adapter.call("set_setting", {
+            "key": "layer_height", "value": True, "scope": "global",
+        })["code"], "INVALID_ARGUMENTS")
+
+    def test_native_bounds_support_one_sided_and_unbounded_definitions(self):
+        app = FakeApp()
+        app.manager.stack.definitions["layer_height"] = {
+            "type": "float", "minimum_value": "0.001", "maximum_value": None,
+        }
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertTrue(adapter.call("set_setting", {
+            "key": "layer_height", "value": 100.0, "scope": "global",
+        })["ok"])
+        self.assertEqual(adapter.call("set_setting", {
+            "key": "layer_height", "value": 0.0, "scope": "global",
+        })["code"], "INVALID_ARGUMENTS")
+
+        app = FakeApp()
+        app.manager.stack.definitions["layer_height"] = {
+            "type": "float", "minimum_value": None, "maximum_value": None,
+        }
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertTrue(adapter.call("set_setting", {
+            "key": "layer_height", "value": -100.0, "scope": "global",
+        })["ok"])
+
+    def test_done_before_start_is_ignored_for_later_processing(self):
+        app = FakeApp()
+        app.backend = NativeLikeBackend("done_only")
+        app.backend.scene = app.controller.scene
+        adapter = SlicerAdapter(app, self.tmp)
+        self.assertNotEqual(adapter.call("start_slice", {})["state"], "done")
+        # A later start signal and fresh G-code without a second Done must not
+        # reuse the stale Done event from before the generation started.
+        app.backend.backendStateChange.emit("Processing")
+        app.controller.scene.gcode_dict[0] = ["fresh-gcode"]
+        self.assertNotEqual(adapter.call("get_slice_status", {})["state"], "done")
+
+    def test_native_enum_backend_states_are_accepted(self):
+        app = FakeApp()
+        app.backend = EnumNativeLikeBackend()
+        app.backend.scene = app.controller.scene
+        adapter = SlicerAdapter(app, self.tmp)
+        adapter._backend_states = NativeBackendState
+        self.assertEqual(adapter.call("start_slice", {})["state"], "done")
+        self.assertTrue(adapter.call("export_gcode", {"filename": "enum-native.gcode"})["ok"])
+
+    def test_stale_clear_and_restore_of_pre_slice_gcode_is_rejected(self):
+        app = FakeApp()
+        app.backend = AsyncNativeLikeBackend()
+        app.backend.scene = app.controller.scene
+        adapter = SlicerAdapter(app, self.tmp)
+        pre_slice_gcode = app.controller.scene.gcode_dict[0]
+        self.assertEqual(adapter.call("start_slice", {})["state"], "running")
+        pre_slice_gcode[:] = []
+        app.backend.backendStateChange.emit("Done")
+        pre_slice_gcode[:] = ["gcode"]
+        self.assertNotEqual(adapter.call("get_slice_status", {})["state"], "done")
+        self.assertEqual(adapter.call("export_gcode", {"filename": "restored.gcode"})["code"],
+                         "UNAVAILABLE")
 
     def test_restore_running_slice_stops_backend_before_restore(self):
         app = FakeApp()

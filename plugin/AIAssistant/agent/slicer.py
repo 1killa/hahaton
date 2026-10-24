@@ -551,6 +551,12 @@ class SlicerAdapter(_AdapterBase):
         self._backend_states = None
         self._slice_plate = None
         self._slice_started = False
+        # Native STE 7.10 does not expose slicingStarted on CuraEngineBackend.
+        # A Done state is emitted before the backend finishes populating the
+        # selected plate's G-code, so keep Done as intent and finalize from a
+        # later main-thread status/export call (or after synchronous forceSlice
+        # returns).
+        self._slice_done_seen = False
         self._slice_duration_plate = None
         self._slice_gcode_before = None
         self._slice_gcode_invalidated = False
@@ -573,10 +579,15 @@ class SlicerAdapter(_AdapterBase):
         _AdapterBase._invalidate_slice(self)
         self._clear_completed_slice()
         self._slice_started_at = None
+        self._slice_started = False
+        self._slice_done_seen = False
 
     def _begin_generation(self):
         self._clear_completed_slice()
-        return _AdapterBase._begin_generation(self)
+        generation = _AdapterBase._begin_generation(self)
+        self._slice_started = False
+        self._slice_done_seen = False
+        return generation
 
     def _import_host(self):
         if self._qt is None:
@@ -779,6 +790,31 @@ class SlicerAdapter(_AdapterBase):
                 return value
         return default
 
+    def _numeric_bound(self, value):
+        """Return a finite numeric bound, treating absent bounds as unbounded.
+
+        STE's SettingDefinition uses ``minimum_value``/``maximum_value`` and
+        may expose those values as numeric strings.  Dynamic definitions can
+        also return None, which means that side has no bound.
+        """
+        if value is _UNSET or value is None or isinstance(value, bool):
+            return _UNSET
+        if isinstance(value, (int, float)):
+            try:
+                if math.isfinite(float(value)):
+                    return value
+            except (TypeError, ValueError):
+                return _UNSET
+            return _UNSET
+        if isinstance(value, str):
+            try:
+                parsed = float(value)
+                if math.isfinite(parsed):
+                    return parsed
+            except (TypeError, ValueError):
+                pass
+        return _UNSET
+
     def _validate_setting(self, key, value, scope, extruder):
         if not isinstance(key, str) or not key:
             raise ValueError("key must be a non-empty string")
@@ -806,8 +842,10 @@ class SlicerAdapter(_AdapterBase):
         choices = self._definition_value(definition, ("values", "options", "choices"), _UNSET)
         if choices is not _UNSET and isinstance(choices, (list, tuple, set)) and value not in choices:
             raise ValueError("%s has an unsupported value" % key)
-        minimum = self._definition_value(definition, ("minimum", "min", "minimum_value"), _UNSET)
-        maximum = self._definition_value(definition, ("maximum", "max", "maximum_value"), _UNSET)
+        minimum = self._numeric_bound(
+            self._definition_value(definition, ("minimum", "min", "minimum_value"), _UNSET))
+        maximum = self._numeric_bound(
+            self._definition_value(definition, ("maximum", "max", "maximum_value"), _UNSET))
         if minimum is not _UNSET and isinstance(value, (int, float)) and value < minimum:
             raise ValueError("%s is below its minimum" % key)
         if maximum is not _UNSET and isinstance(value, (int, float)) and value > maximum:
@@ -815,10 +853,7 @@ class SlicerAdapter(_AdapterBase):
         if key == "cylindrical_mode_base_diameter" and isinstance(value, (int, float)):
             actual_min = 4.0
             if minimum is not _UNSET:
-                try:
-                    actual_min = max(actual_min, float(minimum))
-                except (TypeError, ValueError):
-                    pass
+                actual_min = max(actual_min, float(minimum))
             if value < actual_min:
                 raise ValueError("cylindrical_mode_base_diameter must be at least %.g mm" % actual_min)
         return definition
@@ -1304,6 +1339,47 @@ class SlicerAdapter(_AdapterBase):
         if value is not None:
             self._slice_progress = max(0.0, min(1.0, value / 100.0 if value > 1.0 else value))
 
+    def _gcode_signature_has_content(self, signature):
+        """Return whether a G-code signature contains non-empty output."""
+        if signature is None:
+            return False
+        try:
+            _, length, content = signature
+        except (TypeError, ValueError):
+            return False
+        if not length:
+            return False
+        if isinstance(content, (tuple, list)):
+            if not content:
+                return False
+            for item in content:
+                if item is None:
+                    continue
+                if isinstance(item, str) and not item.strip():
+                    continue
+                return True
+            return False
+        if isinstance(content, str):
+            return bool(content.strip())
+        return True
+
+    def _gcode_signature_is_fresh(self, signature):
+        """Require non-empty G-code with a changed native signature."""
+        if not self._gcode_signature_has_content(signature):
+            return False
+        # Keep object identity in the comparison.  Two deterministic slices
+        # can legitimately produce byte-identical G-code in a new container;
+        # the new native object is still fresh output for that generation.
+        return signature != self._slice_gcode_before
+
+    def _maybe_finish_generation(self, generation):
+        """Finalize only after explicit Done and after post-processing settles."""
+        if generation != self._active_generation or self._slice_state != "running":
+            return
+        if not self._slice_done_seen:
+            return
+        self._finish_generation(generation)
+
     def _tool_get_slice_status(self, arguments):
         # A native forceSlice call can return without emitting any lifecycle
         # signal (for example when the backend has no work).  Bound that
@@ -1312,8 +1388,11 @@ class SlicerAdapter(_AdapterBase):
                 self._slice_started_at is not None and
                 time.time() - self._slice_started_at >= 30.0):
             self._slice_state = "error"
-            self._slice_error = "native slicing emitted no slicingStarted signal"
+            self._slice_error = "native slicing emitted no Processing or slicing-start evidence"
             self._active_generation = None
+            self._slice_done_seen = False
+        else:
+            self._maybe_finish_generation(self._active_generation)
         return self._status()
 
     def _active_build_plate(self):
@@ -1448,14 +1527,29 @@ class SlicerAdapter(_AdapterBase):
             self._slice_error = text or "native slicing cancelled"
             self._active_generation = None
             return
+        if self._state_matches(state, "Processing"):
+            self._slice_started = True
+            self._slice_evidence.append("nativeProcessingStart")
+            return
         if self._state_matches(state, "Done"):
-            self._finish_generation(generation)
+            if not self._slice_started:
+                self._slice_evidence.append("done ignored: no current-generation start")
+                return
+            # STE emits Done before it appends the final post-processed G-code
+            # to gcode_dict.  Record the explicit completion intent and let a
+            # later status/export call (or forceSlice return) finalize it.
+            self._slice_done_seen = True
+            self._slice_evidence.append("nativeDoneSeen")
 
     def _finish_generation(self, generation):
         if generation != self._active_generation or self._slice_state != "running":
             return
-        if not self._slice_started:
+        if not self._slice_started or not self._slice_done_seen:
             return
+        # Native STE appends post-processed lines after Done.  Re-read the
+        # signature at the finalization boundary so that this trailing update
+        # is included before completion fingerprints are captured.
+        self._observe_gcode(generation)
         active_plate = self._active_build_plate()
         if active_plate is not _UNSET and active_plate != self._slice_plate:
             self._slice_evidence.append("done ignored: active build plate changed")
@@ -1463,7 +1557,9 @@ class SlicerAdapter(_AdapterBase):
         if self._slice_duration_plate is not None and self._slice_duration_plate != self._slice_plate:
             self._slice_evidence.append("done ignored: duration belongs to another build plate")
             return
-        if not self._slice_gcode_invalidated or self._gcode_signature() is None:
+        current_gcode = self._gcode_signature()
+        if (not self._slice_gcode_invalidated or
+                not self._gcode_signature_is_fresh(current_gcode)):
             self._slice_evidence.append("done ignored: no new gcode observed")
             return
         self._slice_progress = 1.0
@@ -1471,7 +1567,7 @@ class SlicerAdapter(_AdapterBase):
         self._slice_state = "done"
         self._active_generation = generation
         self._slice_completed_plate = active_plate
-        self._slice_completed_gcode = self._gcode_signature()
+        self._slice_completed_gcode = current_gcode
         self._slice_completed_scene = self._scene_fingerprint()
         self._slice_completed_settings = self._settings_fingerprint()
 
@@ -1541,6 +1637,10 @@ class SlicerAdapter(_AdapterBase):
             self._slice_state = "error"
             self._slice_error = "native forceSlice returned false"
             self._active_generation = None
+        else:
+            # Lightweight/native test doubles can emit Done and finish their
+            # trailing G-code append synchronously inside forceSlice().
+            self._maybe_finish_generation(generation)
         return {"state": self._slice_state, "plugin_generation_id": generation}
 
     def _native_nodes(self):
@@ -1615,6 +1715,8 @@ class SlicerAdapter(_AdapterBase):
         return data[plate]
 
     def _tool_export_gcode(self, arguments):
+        if self._active_generation is not None:
+            self._maybe_finish_generation(self._active_generation)
         if self._slice_state != "done" or self._active_generation is None:
             return _error("G-code requires a newly completed slice generation", "UNAVAILABLE")
         if not self._validate_completed_generation():

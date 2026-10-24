@@ -41,10 +41,12 @@ class AIAssistant(Extension):
         if self._server is None:
             runtime = os.path.join(Resources.getDataStoragePath(), "ste_assistant")
             output_dir = os.path.join(runtime, "outputs")
+            history_dir = os.path.join(runtime, "history")
             os.makedirs(output_dir, exist_ok=True)
+            os.makedirs(history_dir, exist_ok=True)
             adapter = SlicerAdapter(self._app, output_dir)
             tools = ToolRegistry(adapter, output_dir, invoke=self._bridge.invoke)
-            session = AgentSession(self._config, tools)
+            session = AgentSession(self._config, tools, history_dir=history_dir)
             self._server = AssistantServer(session, tools, self._config, runtime, mode="steslicer")
             self._server_thread = threading.Thread(target=self._server.serve_forever)
             self._server_thread.daemon = True
