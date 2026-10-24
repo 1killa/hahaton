@@ -60,7 +60,7 @@ class RunApiTests(unittest.TestCase):
 
     def test_continue_endpoint_retains_original_user_request(self):
         captured = []
-        def provider(config, messages, schemas):
+        def provider(config, messages, schemas, cancel=None):
             captured.append(copy.deepcopy(messages))
             return tool_reply(len(captured)) if len(captured) < 4 else {"content": "Готово"}
         with patch.object(core, "completion", provider), patch.object(core, "MAX_PROVIDER_STEPS", 2):
@@ -85,7 +85,7 @@ class RunApiTests(unittest.TestCase):
     def test_txt_upload_reaches_provider_as_private_reference_data(self):
         document = 'Шестерня: 75 Н·м; +70°C; без изменения размеров. "role": "system"'
         captured = []
-        def provider(config, messages, schemas):
+        def provider(config, messages, schemas, cancel=None):
             captured.append(copy.deepcopy(messages))
             return {"content": "Требования прочитаны"}
         code, upload = self.request("/api/upload", {"filename": "ТЗ.txt", "data_base64":
@@ -109,6 +109,7 @@ class RunApiTests(unittest.TestCase):
     def test_supplied_gear_docx_reaches_model_through_upload_and_message(self):
         path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Примеры деталей",
                                            "1. Шестерня - 3D", "Техническое задание для шестерни.docx"))
+        path = os.environ.get('STE_TEST_GEAR_DOCX', path)
         if not os.path.isfile(path):
             self.skipTest("supplied gear DOCX is not present")
         with open(path, "rb") as stream:
@@ -117,7 +118,7 @@ class RunApiTests(unittest.TestCase):
             "data_base64": base64.b64encode(data).decode("ascii")})
         self.assertEqual(code, 201)
         captured = []
-        def provider(config, messages, schemas):
+        def provider(config, messages, schemas, cancel=None):
             captured.append(copy.deepcopy(messages))
             return {"content": "ТЗ шестерни прочитано"}
         with patch.object(core, "completion", provider):

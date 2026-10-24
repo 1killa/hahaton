@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import struct
 import tempfile
 import threading
 import unittest
@@ -15,6 +16,16 @@ from tests.test_core import TinyAdapter
 
 
 class ServerTests(unittest.TestCase):
+    def test_contest_sized_model_over_24_mib_uploads_over_http(self):
+        triangles = 564696  # Same size as the supplied decorative figurine.
+        data = b'test fixture'.ljust(80, b'\0') + struct.pack('<I', triangles) + bytes(50 * triangles)
+        with self.request('/api/upload', {'filename': 'large.stl',
+                'data_base64': base64.b64encode(data).decode('ascii')}) as response:
+            upload = json.loads(response.read().decode('utf-8'))
+        path = self.server.resolve_upload(upload['id'])['path']
+        self.assertEqual(os.path.getsize(path), 28234884)
+        self.assertEqual(upload['kind'], 'model')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.config = ConfigStore()

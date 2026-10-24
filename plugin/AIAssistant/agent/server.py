@@ -20,7 +20,8 @@ from .rpc import dispatch_rpc
 from .tools import ToolError
 
 MAX_UPLOAD = 24 * 1024 * 1024
-MAX_BODY = 34 * 1024 * 1024
+MAX_MODEL_UPLOAD = 64 * 1024 * 1024
+MAX_BODY = ((MAX_MODEL_UPLOAD + 2) // 3) * 4 + 64 * 1024
 
 
 def _validate_upload(filename, data):
@@ -28,8 +29,9 @@ def _validate_upload(filename, data):
             re.search(r"[\\/\x00-\x1f:]", filename) or filename in (".", "..")):
         raise ToolError("Требуется имя файла без пути.")
     extension = os.path.splitext(filename)[1].lower()
-    if not data or len(data) > MAX_UPLOAD:
-        raise ToolError("Размер вложения должен быть от 1 байта до 24 MiB.")
+    limit = MAX_MODEL_UPLOAD if extension in (".stl", ".obj", ".3mf") else MAX_UPLOAD
+    if not data or len(data) > limit:
+        raise ToolError("Размер вложения должен быть от 1 байта до %s MiB." % (limit // (1024 * 1024)))
     if extension == ".png":
         valid = len(data) >= 24 and data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR"
         kind, mime = "image", "image/png"
@@ -38,7 +40,10 @@ def _validate_upload(filename, data):
         kind, mime = "image", "image/jpeg"
     elif extension == ".stl":
         binary = len(data) >= 84 and 84 + struct.unpack("<I", data[80:84])[0] * 50 == len(data)
-        ascii_stl = data.lstrip().lower().startswith(b"solid") and b"facet" in data.lower() and b"endsolid" in data.lower()
+        ascii_stl = False
+        if not binary and data[:256].lstrip().lower().startswith(b"solid"):
+            lower = data.lower()
+            ascii_stl = b"facet" in lower and b"endsolid" in lower
         valid, kind, mime = binary or ascii_stl, "model", "model/stl"
     elif extension == ".obj":
         try:
@@ -295,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise ToolError("Некорректный Content-Length.")
         if length <= 0 or length > MAX_BODY:
-            raise ToolError("Слишком большой или пустой запрос (лимит 34 MiB).")
+            raise ToolError("Слишком большой или пустой запрос (модели до 64 MiB, изображения и документы до 24 MiB).")
         try:
             value = json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, UnicodeError):

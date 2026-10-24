@@ -4,6 +4,7 @@
   const TOKEN_KEY = 'ste_assistant_token';
   const API_ROOT = '/api';
   const MAX_FILE_BYTES = 24 * 1024 * 1024;
+  const MAX_MODEL_BYTES = 64 * 1024 * 1024;
   const MAX_ATTACHMENTS = 8;
   const MAX_EVENTS = 1000;
   const POLL_INTERVAL_MS = 1000;
@@ -1134,8 +1135,9 @@
       showToast(`Формат .${extension || 'без расширения'} не поддерживается`, 'error');
       return;
     }
-    if (file.size > MAX_FILE_BYTES) {
-      showToast(`Файл «${file.name}» больше 24 МБ`, 'error');
+    const limit = ['stl', 'obj', '3mf'].includes(extension) ? MAX_MODEL_BYTES : MAX_FILE_BYTES;
+    if (file.size > limit) {
+      showToast(`Файл «${file.name}» больше ${limit / (1024 * 1024)} MiB`, 'error');
       return;
     }
     if (app.pendingAttachments.length + app.uploadInFlight >= MAX_ATTACHMENTS) {

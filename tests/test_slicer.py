@@ -558,7 +558,7 @@ class SlicerAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.call("export_gcode", {"filename": "wrong-plate.gcode"})["code"],
                          "UNAVAILABLE")
 
-    def test_native_bounds_accept_none_and_numeric_strings_but_reject_string_input(self):
+    def test_native_bounds_accept_none_and_numeric_strings_but_reject_boolean(self):
         app = FakeApp()
         app.manager.stack.definitions["layer_height"] = {
             "type": "float", "minimum_value": None, "maximum_value": "1.0",
@@ -570,9 +570,10 @@ class SlicerAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.call("set_setting", {
             "key": "layer_height", "value": 1.1, "scope": "global",
         })["code"], "INVALID_ARGUMENTS")
-        self.assertEqual(adapter.call("set_setting", {
+        self.assertTrue(adapter.call("set_setting", {
             "key": "layer_height", "value": "0.2", "scope": "global",
-        })["code"], "INVALID_ARGUMENTS")
+        })["ok"])
+        self.assertEqual(app.manager.stack.values["layer_height"], 0.2)
         self.assertEqual(adapter.call("set_setting", {
             "key": "layer_height", "value": True, "scope": "global",
         })["code"], "INVALID_ARGUMENTS")

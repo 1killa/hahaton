@@ -103,6 +103,7 @@ class DocumentExtractionTests(unittest.TestCase):
         path = os.path.abspath(os.path.join(
             os.path.dirname(__file__), "..", "..", "Примеры деталей",
             "1. Шестерня - 3D", "Техническое задание для шестерни.docx"))
+        path = os.environ.get('STE_TEST_GEAR_DOCX', path)
         if not os.path.isfile(path):
             self.skipTest("supplied gear DOCX is not present")
         with open(path, "rb") as stream:

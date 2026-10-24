@@ -46,13 +46,13 @@ class HistoryRecoveryTests(unittest.TestCase):
         replies = iter([tool_reply(1), {'content': 'Условия прочитаны'}])
         attachment = {'id': 'expired-upload', 'name': 'ТЗ.txt', 'kind': 'document',
                       'text': 'Сохранить размеры. Нагрузка 75 Н·м.', 'text_chars': 41}
-        with patch.object(core, 'completion', side_effect=lambda *args: next(replies)):
+        with patch.object(core, 'completion', side_effect=lambda *args, **kwargs: next(replies)):
             session.submit('Прочитай ТЗ', [attachment])
             self.wait_idle(session)
         restarted = self.session()
         self.assertEqual(restarted.tools.adapter.calls, [])
         captured = []
-        def complete(config, messages, schemas):
+        def complete(config, messages, schemas, cancel=None):
             captured.append(copy.deepcopy(messages))
             return {'content': 'Контекст сохранён'}
         with patch.object(core, 'completion', side_effect=complete):

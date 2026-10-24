@@ -31,7 +31,7 @@ class AgentRunTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def provider(self, reply):
-        def complete(config, messages, schemas):
+        def complete(config, messages, schemas, cancel=None):
             self.requests.append(copy.deepcopy(messages))
             return reply(len(self.requests))
         return patch.object(core, "completion", complete)

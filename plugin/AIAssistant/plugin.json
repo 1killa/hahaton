@@ -1,7 +1,7 @@
 {
   "name": "STE Assistant",
   "author": "hahaton team",
-  "version": "0.3.0",
+  "version": "0.3.4",
   "description": "Desktop print preparation assistant with saved conversations and native slicing status",
   "api": 5,
   "i18n-catalog": "steslicer"

@@ -132,7 +132,7 @@ class ConversationStoreTests(unittest.TestCase):
             {"role": "assistant", "content": "Продолжено"}])
         requests = []
 
-        def complete(_config, messages, _schemas):
+        def complete(_config, messages, _schemas, cancel=None):
             requests.append(json.loads(json.dumps(messages)))
             return next(replies) if len(requests) <= 2 else {"role": "assistant", "content": "Следующий ответ"}
 

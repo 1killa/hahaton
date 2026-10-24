@@ -26,6 +26,10 @@ Snapshot сохраняет **наличие** и значения всех user
 
 ## HTTP для SPA
 
+Обновление 0.3.2: модели STL/OBJ/3MF до 64 MiB, остальные вложения до 24 MiB. `set_setting` нормализует скаляры по нативному определению до проверки hard pins, записывает `userChanges` и возвращает проверенное чтением значение. Native `materialLengths` (метры) преобразуется в `material_mm` (миллиметры).
+
+Обновление 0.3.1: транспорт LLM использует SSE с JSON fallback и явным системным TLS-контекстом. Сетевой таймаут переводит run в `paused`, `pause_reason=provider_timeout`, `can_continue=true`; `/api/continue` начинает новый сетевой запрос после явного действия пользователя. Полные tool batches сохраняются, частичные SSE tool calls не исполняются.
+
 Статика `/`, `/app.js`, `/style.css`. Все `/api/*` требуют `X-AIAssistant-Token`. Токен передан fragment `#token=...`, извлекается и хранится в sessionStorage, fragment удаляется history.replaceState. Auth не передаётся query/body. Все POST имеют `Content-Type: application/json` и точный Origin; fetch создаёт Origin автоматически. Ошибки JSON `{error:string}` и HTTP non-2xx. POST ожидают объект.
 
 `GET /api/state?after=<event_id>`:

@@ -162,7 +162,15 @@ class ToolRegistry:
             if os.path.isfile(candidate):
                 stem, extension = os.path.splitext(args["filename"])
                 args["filename"] = stem + "_" + uuid.uuid4().hex[:8] + extension
-        result = self.invoke(lambda: self.adapter.call(name, args), cancel=cancel)
+        if name in ("save_project", "export_gcode") and callable(getattr(self.adapter, "export_file", None)):
+            # Native writers marshal snapshots (and the whole 3MF workspace
+            # write) back to Qt and wait. Calling them inside invoke deadlocks.
+            try:
+                result = self.adapter.export_file(name, args, self.invoke, cancel=cancel)
+            except (ValueError, RuntimeError) as error:
+                raise ToolError(str(error))
+        else:
+            result = self.invoke(lambda: self.adapter.call(name, args), cancel=cancel)
         if isinstance(result, dict) and (result.get("ok") is False or result.get("code") in ("UNAVAILABLE", "ERROR")):
             raise ToolError(result.get("error") or result.get("message") or "Инструмент недоступен.")
         if name in ("save_project", "export_gcode"):
@@ -195,6 +203,8 @@ class ToolRegistry:
         if not schema:
             raise ToolError("Неизвестный инструмент: " + str(name))
         validate(schema["inputSchema"], arguments)
+        if name == "set_setting" and callable(getattr(self.adapter, "prepare_setting", None)):
+            arguments = self.invoke(lambda: self.adapter.prepare_setting(arguments), cancel=cancel)
         self._guard(name, arguments)
         if name == "compare_variants":
             return self._compare(arguments["variants"], cancel)

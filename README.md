@@ -2,6 +2,8 @@
 
 Черновик плагина ИИ-помощника для STE Slicer 7.10 (Python 3.5, PyQt5, API 5).
 
+Текущая версия — **0.3.4**. Исправлены потоковое подключение LLM и продолжение после таймаута, получение времени/расхода после нарезки, загрузка моделей до 64 MiB и изменение типизированных настроек. Экспорт G-code/3MF выполняется без взаимной блокировки потоков; служебные камеры и предпросмотр не считаются изменениями модели. После обновления установленного плагина сохраните проект и перезапустите STE.
+
 - [Установка и использование](plugin/README.md).
 - [Контракты и обнаруженные API](docs/API_CONTRACT.md).
 - [Проверка и ограничения](docs/VERIFICATION.md).
@@ -32,6 +34,8 @@ python tools/package_submission.py
 ```powershell
 .\tools\run_host_python.ps1 -Script .\tools\host_smoke.py
 .\tools\run_host_python.ps1 -Script .\tools\host_tests.py -Log .runtime\host-tests.log
+.\tools\run_host_python.ps1 -Script .\tools\host_adapter_regressions.py -Log .runtime\adapter-tests.log
+.\tools\run_host_python.ps1 -Script .\tools\host_export_regression.py -Log .runtime\export-tests.log
 ```
 
 Архив имеет требуемые верхние папки `plugin/` и `results/`. Перед сдачей добавьте фактические результаты по всем моделям и используйте `--require-results`. Репозиторий не содержит ключей и результатов, выданных за реальные без слайсинга.

@@ -5,7 +5,8 @@ The web application deliberately talks to this module through ``call``.  The
 module has no Qt or Uranium imports at import time: this is important both for
 the demo mode and for the Python 3.5 runtime bundled with STE.  The real
 adapter is expected to be constructed and called from STE's Qt main thread;
-the registry above it is responsible for queuing calls there.
+the registry above it is responsible for queuing calls there. Native file
+writers run on the calling worker, with preparation and validation on Qt.
 """
 
 from __future__ import absolute_import
@@ -16,6 +17,7 @@ import math
 import os
 import re
 import time
+import threading
 import uuid
 
 
@@ -546,6 +548,7 @@ class SlicerAdapter(_AdapterBase):
         self._duration_format = None
         self._backend = None
         self._connected_backend = None
+        self._signal_connections = []
         self._nodes_by_id = {}
         self._profile_changes = None
         self._backend_states = None
@@ -761,11 +764,19 @@ class SlicerAdapter(_AdapterBase):
         return _UNSET
 
     def _set_property(self, stack, key, value):
+        changes = self._user_changes(stack)
+        setter = _callable(changes, "setProperty")
+        if setter is not None:
+            setter(key, "value", value)
+            return
         for name in ("setProperty", "setSettingValue", "setValue"):
             method = _callable(stack, name)
             if method is None:
                 continue
-            for args in ((key, "value", value), (key, value)):
+            # ContainerStack inherits QObject.setProperty(name, value), which
+            # writes a Qt dynamic property, NOT a slicer setting. Never use it.
+            variants = ((key, "value", value),) if name == "setProperty" else ((key, value),)
+            for args in variants:
                 try:
                     method(*args)
                     return
@@ -776,6 +787,35 @@ class SlicerAdapter(_AdapterBase):
             values[key] = value
             return
         raise RuntimeError("settings stack cannot set %s" % key)
+
+    def prepare_setting(self, arguments):
+        """Normalize LLM scalar strings using the actual native definition."""
+        args = dict(arguments)
+        definition = self._definition(args["key"], args["scope"], args.get("extruder", 0))
+        kind = self._definition_value(definition, ("type", "value_type", "setting_type"), None)
+        value = args["value"]
+        if isinstance(value, str):
+            text = value.strip()
+            if kind in (bool, "bool", "boolean"):
+                if len(text) >= 2 and text[0] == text[-1] == '"':
+                    text = json.loads(text)
+                boolean = {"true": True, "false": False, "yes": True, "no": False, "1": True, "0": False}
+                if isinstance(text, str) and text.lower() in boolean:
+                    value = boolean[text.lower()]
+            elif kind in (int, "int", "integer", float, "float", "double", "number"):
+                try:
+                    number = float(text)
+                    if math.isfinite(number):
+                        if kind in (int, "int", "integer"):
+                            if number.is_integer():
+                                value = int(number)
+                        else:
+                            value = number
+                except (ValueError, OverflowError):
+                    pass
+        args["value"] = value
+        self._validate_setting(args["key"], value, args["scope"], args.get("extruder", 0))
+        return args
 
     def _definition_value(self, definition, names, default=_UNSET):
         if definition is None:
@@ -1010,9 +1050,27 @@ class SlicerAdapter(_AdapterBase):
         if nodes is _UNSET or nodes is None:
             nodes = _read_attr(root, ("children", "nodes"), [])
         try:
-            return list(nodes)
+            return [node for node in nodes if self._is_model_node(node)]
         except TypeError:
             return []
+
+    def _is_model_node(self, node):
+        # STE's scene also contains the build volume, cameras (including a
+        # new 'snapshot' Camera for every native export), shadows and layer
+        # previews. Use the same isSliceable decoration as StartSliceJob;
+        # names and the presence of a render mesh do not identify a model.
+        decoration = _callable(node, "callDecoration")
+        if decoration is not None:
+            if decoration("isGroup"):
+                return True
+            return bool(decoration("isSliceable") and
+                        _read_attr(node, ("getMeshData",), None) is not None)
+        mesh = _callable(node, "getMeshData")
+        if mesh is not None:
+            return mesh() is not None
+        # Lightweight adapters without the Uranium scene API expose models
+        # directly, without decorations or getMeshData.
+        return True
 
     def _find_node(self, object_id):
         for node in self._scene_nodes():
@@ -1062,6 +1120,7 @@ class SlicerAdapter(_AdapterBase):
         return {"values": values, "scope": scope}
 
     def _tool_set_setting(self, arguments):
+        arguments = self.prepare_setting(arguments)
         scope = arguments["scope"]
         index = int(arguments.get("extruder", 0))
         if scope not in _SCOPES or index < 0:
@@ -1069,6 +1128,9 @@ class SlicerAdapter(_AdapterBase):
         self._validate_setting(arguments["key"], arguments["value"], scope, index)
         self._set_property(self._get_stack(scope, index), arguments["key"], arguments["value"])
         self._invalidate_slice()
+        actual = self._get_property(self._get_stack(scope, index), arguments["key"])
+        if actual is _UNSET or actual != arguments["value"]:
+            return _error("STE did not apply %s; read-back value differs" % arguments["key"], "UNAVAILABLE")
         return _success(key=arguments["key"], value=arguments["value"], scope=scope, extruder=index)
 
     def _machine_is_five_axis(self):
@@ -1324,6 +1386,9 @@ class SlicerAdapter(_AdapterBase):
             connector = getattr(signal, "connect", None)
             if callable(connector):
                 connector(callback)
+                # UM.Signal stores weak references to functions. Keep each
+                # callback alive for the complete slice lifecycle.
+                self._signal_connections.append((signal, callback))
                 return name
         return None
 
@@ -1393,6 +1458,9 @@ class SlicerAdapter(_AdapterBase):
             self._slice_done_seen = False
         else:
             self._maybe_finish_generation(self._active_generation)
+        if self._slice_state == "done":
+            # PrintInformation can update after native Done/post-processing.
+            self._slice_result = self._collect_print_information()
         return self._status()
 
     def _active_build_plate(self):
@@ -1423,7 +1491,16 @@ class SlicerAdapter(_AdapterBase):
 
     def _scene_fingerprint(self):
         try:
-            return _safe_json(self._tool_get_scene({}))
+            scene = self._tool_get_scene({})
+            for item in scene["objects"]:
+                item.pop("name", None)  # Renaming has no effect on slicing.
+                node = self._nodes_by_id[item["id"]]
+                transform = _read_attr(node, ("getWorldTransformation",), None)
+                data = _read_attr(transform, ("getData",), None)
+                if data is not None:
+                    item["world_transform"] = _safe_json(data.tolist())
+            scene["objects"].sort(key=lambda item: item["id"])
+            return _safe_json(scene)
         except Exception:
             return None
 
@@ -1434,21 +1511,24 @@ class SlicerAdapter(_AdapterBase):
         return None
 
     def _validate_completed_generation(self):
+        return self._completed_generation_problem() is None
+
+    def _completed_generation_problem(self):
         if self._slice_completed_plate is not _UNSET:
             current_plate = self._active_build_plate()
             if current_plate is _UNSET or current_plate != self._slice_completed_plate:
-                return False
+                return "сменился активный стол печати"
         if self._slice_completed_gcode is not None:
             if self._gcode_signature() != self._slice_completed_gcode:
-                return False
+                return "изменился G-code"
         if self._slice_completed_scene is not None:
             if self._scene_fingerprint() != self._slice_completed_scene:
-                return False
+                return "изменилась модель или её расположение"
         if self._slice_completed_settings is not None:
             current_settings = self._settings_fingerprint()
             if current_settings is None or current_settings != self._slice_completed_settings:
-                return False
-        return True
+                return "изменились настройки печати"
+        return None
 
     def _observe_gcode(self, generation):
         if generation != self._active_generation:
@@ -1576,12 +1656,16 @@ class SlicerAdapter(_AdapterBase):
         info = _read_attr(self.app, ("getPrintInformation", "printInformation"), None)
         if info is None:
             return result
+        self._import_host()
         duration = _read_attr(info, ("currentPrintTime",), None)
         if duration is not None:
             seconds_format = "seconds"
             if self._duration_format:
                 seconds_format = self._duration_format.Format.Seconds
-            display = _call_variants(duration, "getDisplayString", [((seconds_format,), {})])
+            try:
+                display = _call_variants(duration, "getDisplayString", [((seconds_format,), {})])
+            except Exception:
+                display = _UNSET
             if display is not _UNSET:
                 try:
                     result["time_seconds"] = int(display)
@@ -1589,10 +1673,14 @@ class SlicerAdapter(_AdapterBase):
                     pass
         for output, name in (("material_mm", "materialLengths"), ("material_g", "materialWeights")):
             value = _read_attr(info, (name,), None)
-            if isinstance(value, (int, float)):
-                result[output] = value
+            # Native materialLengths is measured in metres, unlike the wire
+            # contract's material_mm. Preserve extruder positions and units.
+            factor = 1000.0 if output == "material_mm" else 1.0
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                result[output] = value * factor
             elif isinstance(value, (list, tuple)) and value:
-                result[output] = list(value)
+                if all(isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item) for item in value):
+                    result[output] = [item * factor for item in value]
         result["available"] = any(key in result for key in ("time_seconds", "material_mm", "material_g"))
         return result
 
@@ -1600,6 +1688,14 @@ class SlicerAdapter(_AdapterBase):
         backend = self._get_backend()
         self._import_host()
         self._backend = backend
+        for signal, callback in self._signal_connections:
+            disconnect = _callable(signal, "disconnect")
+            if disconnect:
+                try:
+                    disconnect(callback)
+                except (TypeError, ValueError, RuntimeError):
+                    pass
+        self._signal_connections = []
         nodes = self._native_nodes()
         generation = self._begin_generation()
         if not nodes:
@@ -1646,7 +1742,64 @@ class SlicerAdapter(_AdapterBase):
     def _native_nodes(self):
         return self._scene_nodes()
 
-    def _write_native(self, filename, writer_name, file_handler_name, nodes):
+    def _native_writer(self, writer_name, file_handler_name):
+        handler = _read_attr(self.app, (file_handler_name,), None)
+        writer = _call_variants(handler, "getWriter", [((writer_name,), {})])
+        if writer is _UNSET or writer is None:
+            raise RuntimeError("native %s unavailable" % writer_name)
+        return writer
+
+    def export_file(self, name, arguments, invoke, cancel=None):
+        """Called on the registry worker, like STE's native WriteFileJob.
+
+        Never wait for this method from Qt: the writers synchronously queue
+        OpenGL/3MF work there. Only the host writer crosses the thread boundary;
+        our scene/settings checks and writer lookup stay on Qt.
+        """
+        bridge = getattr(invoke, "__self__", None)
+        if getattr(bridge, "owner_thread", None) == threading.current_thread().ident:
+            raise RuntimeError("Экспорт нужно запускать из рабочего потока, чтобы STE мог обработать миниатюру.")
+
+        def check_cancel():
+            if cancel is not None and cancel.is_set():
+                raise RuntimeError("Операция отменена.")
+
+        def prepare():
+            check_cancel()
+            invalid = self._validate_arguments(name, arguments)
+            if invalid:
+                raise ValueError(invalid["error"])
+            if name == "export_gcode":
+                self._require_completed_gcode()
+                writer_name, handler = "GCodeWriter", "getMeshFileHandler"
+                nodes = self._gcode_nodes()
+            elif name == "save_project":
+                writer_name, handler = "3MFWriter", "getWorkspaceFileHandler"
+                nodes = self._native_nodes()
+            else:
+                raise ValueError("unsupported export operation")
+            return {"writer": self._native_writer(writer_name, handler), "writer_name": writer_name,
+                    "handler": handler, "nodes": nodes, "generation": self._active_generation,
+                    "scene": self._scene_fingerprint(), "settings": self._settings_fingerprint()}
+
+        plan = invoke(prepare, cancel=cancel)
+
+        def validate_output():
+            check_cancel()
+            if (self._scene_fingerprint() != plan["scene"] or
+                    self._settings_fingerprint() != plan["settings"]):
+                raise RuntimeError("Модель или настройки изменились во время экспорта. Повторите экспорт.")
+            if name == "export_gcode":
+                if self._active_generation != plan["generation"]:
+                    raise RuntimeError("Во время экспорта началась другая нарезка. Повторите экспорт.")
+                self._require_completed_gcode()
+
+        check_cancel()
+        return self._write_native(arguments["filename"], plan["writer_name"], plan["handler"],
+                                  plan["nodes"], writer=plan["writer"],
+                                  before_commit=lambda: invoke(validate_output, cancel=cancel))
+
+    def _write_native(self, filename, writer_name, file_handler_name, nodes, writer=None, before_commit=None):
         filename = _safe_filename(filename)
         if not os.path.isdir(self.output_dir):
             os.makedirs(self.output_dir)
@@ -1658,13 +1811,8 @@ class SlicerAdapter(_AdapterBase):
             raise ValueError("output path must not be a symlink")
         if os.path.realpath(os.path.dirname(path)) != output_root:
             raise ValueError("output path escaped output_dir")
-        handler = _read_attr(self.app, (file_handler_name,), None)
-        if handler is None:
-            getter = "getWorkspaceFileHandler" if file_handler_name == "getWorkspaceFileHandler" else "getMeshFileHandler"
-            handler = _call_variants(self.app, getter, [((), {})])
-        writer = _call_variants(handler, "getWriter", [((writer_name,), {})])
-        if writer is _UNSET or writer is None:
-            raise RuntimeError("native %s unavailable" % writer_name)
+        if writer is None:
+            writer = self._native_writer(writer_name, file_handler_name)
         stream_mode = "w" if writer_name == "GCodeWriter" else "wb"
         temp_path = os.path.join(output_root, ".%s.%s.tmp" % (filename, uuid.uuid4().hex))
         if os.path.realpath(os.path.dirname(temp_path)) != output_root:
@@ -1681,6 +1829,8 @@ class SlicerAdapter(_AdapterBase):
             size = os.path.getsize(temp_path)
             if size <= 0:
                 raise RuntimeError("native %s writer produced an empty file" % writer_name)
+            if before_commit is not None:
+                before_commit()
             # Re-check immediately before the atomic replacement.  A symlink
             # supplied by a caller is rejected, and a failed writer leaves an
             # existing destination untouched.
@@ -1714,15 +1864,19 @@ class SlicerAdapter(_AdapterBase):
             raise RuntimeError("gcode for active build plate unavailable")
         return data[plate]
 
-    def _tool_export_gcode(self, arguments):
+    def _require_completed_gcode(self):
         if self._active_generation is not None:
             self._maybe_finish_generation(self._active_generation)
         if self._slice_state != "done" or self._active_generation is None:
-            return _error("G-code requires a newly completed slice generation", "UNAVAILABLE")
-        if not self._validate_completed_generation():
+            raise RuntimeError(self._slice_error or "Для экспорта G-code сначала выполните нарезку текущей модели.")
+        problem = self._completed_generation_problem()
+        if problem is not None:
             self._invalidate_slice()
-            return _error("completed slice is stale after a native scene, setting, or build-plate change",
-                          "UNAVAILABLE")
+            self._slice_error = "Результат нарезки устарел: %s. Выполните нарезку заново." % problem
+            raise RuntimeError(self._slice_error)
+
+    def _tool_export_gcode(self, arguments):
+        self._require_completed_gcode()
         return self._write_native(arguments["filename"], "GCodeWriter", "getMeshFileHandler", self._gcode_nodes())
 
     def _tool_check_5d(self, arguments):
