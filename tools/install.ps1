@@ -10,7 +10,7 @@ if (Test-Path -LiteralPath $destination) {
     throw "Plugin directory already exists: $destination. Close STE and rename the existing directory to preserve it before installing."
 }
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-Get-ChildItem -LiteralPath $source -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' -and $_.Extension -notin @('.pyc', '.pyo') } | ForEach-Object {
+Get-ChildItem -LiteralPath $source -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]__pycache__[\\/]' -and $_.Extension -notin @('.pyc', '.pyo', '.qmlc', '.jsc') } | ForEach-Object {
     $relativePath = $_.FullName.Substring($source.Length + 1)
     $targetPath = Join-Path $destination $relativePath
     New-Item -ItemType Directory -Path (Split-Path -Parent $targetPath) -Force | Out-Null

@@ -19,6 +19,11 @@ REQUEST_TIMEOUT_SECONDS = 180
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_STREAM_SECONDS = 600
 
+_RESOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'resources'))
+CA_BUNDLE_PATH = os.path.join(_RESOURCE_DIR, 'cacert.pem')
+CA_BUNDLE_NOTICE_PATH = os.path.join(_RESOURCE_DIR, 'NOTICE')
+CA_BUNDLE_LICENSE_PATH = os.path.join(_RESOURCE_DIR, 'LICENSE')
+
 SYSTEM_PROMPT = """Ты — помощник подготовки печати внутри STE Slicer, рабочий черновик.
 Отвечай по-русски, конкретно и понятно. Сначала узнай реальные объекты, доступные
 профили, материал и настройки инструментами. Для импорта вложенной 3D-модели используй
@@ -56,9 +61,63 @@ class ProviderTimeout(ProviderError):
     pass
 
 
+class ProviderTLSError(ProviderError):
+    pass
+
+
+def _certificate_verification_error(error):
+    """Return true only for TLS peer-certificate verification failures."""
+    certificate_types = []
+    for candidate in (getattr(ssl, 'SSLCertVerificationError', None),
+                      getattr(ssl, 'CertificateError', None)):
+        if isinstance(candidate, type):
+            certificate_types.append(candidate)
+    certificate_types = tuple(certificate_types)
+    pending = [error]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if certificate_types and isinstance(current, certificate_types):
+            return True
+        if isinstance(current, ssl.SSLError):
+            text = str(current).upper()
+            reason = str(getattr(current, 'reason', '')).upper()
+            if 'CERTIFICATE_VERIFY_FAILED' in text or 'CERTIFICATE_VERIFY_FAILED' in reason:
+                return True
+        pending.append(getattr(current, 'reason', None))
+        pending.append(getattr(current, '__cause__', None))
+        pending.append(getattr(current, '__context__', None))
+        args = getattr(current, 'args', ())
+        if isinstance(args, (tuple, list)):
+            pending.extend(args)
+    return False
+
+
+def _certificate_verification_message(config, error):
+    detail = str(getattr(error, 'reason', error)).strip()
+    return config.redact(
+        'Проверка сертификата LLM не пройдена (%s). Проверьте дату и время системы, '
+        'прокси или антивирус с TLS-инспекцией, корневые сертификаты и обновление '
+        'плагина. Автоматического повтора нет; повторите вручную после проверки.' % detail)
+
+
 def provider_ssl_context():
-    # Do not inherit a host override using STE's old certifi bundle.
-    return ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+    # Start with platform roots (including Windows roots), then add the
+    # module-relative bundle for hosts whose Python/OpenSSL store is stale.
+    context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.check_hostname = True
+    try:
+        context.load_verify_locations(cafile=CA_BUNDLE_PATH)
+    except (IOError, OSError, ValueError) as error:
+        raise ProviderTLSError(
+            'Не удалось загрузить доверенный пакет сертификатов плагина (%s): %s. '
+            'Переустановите или обновите плагин; небезопасный режим не включён.' %
+            (CA_BUNDLE_PATH, error))
+    return context
 
 
 def read_completion(response, cancel=None):
@@ -164,7 +223,8 @@ def completion(config, messages, schemas, cancel=None):
                       headers={"Content-Type": "application/json", "Accept": "text/event-stream",
                                "Authorization": "Bearer " + values["api_key"]})
     try:
-        with build_opener(NoCredentialRedirect(), HTTPSHandler(context=provider_ssl_context())).open(
+        provider_context = provider_ssl_context()
+        with build_opener(NoCredentialRedirect(), HTTPSHandler(context=provider_context)).open(
                 request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             message = read_completion(response, cancel)
         if not isinstance(message, dict):
@@ -180,7 +240,9 @@ def completion(config, messages, schemas, cancel=None):
         except Exception:
             pass
         raise ProviderError(config.redact("Провайдер вернул HTTP %s. %s Автоматического повтора нет." % (error.code, detail)))
-    except (URLError, OSError) as error:
+    except (URLError, OSError, ssl.CertificateError) as error:
+        if _certificate_verification_error(error):
+            raise ProviderError(_certificate_verification_message(config, error))
         reason = getattr(error, 'reason', error)
         if isinstance(reason, (socket.timeout, TimeoutError)):
             raise ProviderTimeout('LLM не передавала данные %s секунд. Выполненные действия сохранены. Нажмите «Продолжить»; повторного импорта модели не требуется.' % REQUEST_TIMEOUT_SECONDS)

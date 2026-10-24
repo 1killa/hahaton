@@ -1,0 +1,7 @@
+This directory vendors the certifi 2026.10.19 CA bundle.
+
+Upstream source: https://github.com/certifi/python-certifi/tree/2026.10.19
+Upstream version: 2026.10.19
+Vendored on: 2026-10-24
+Bundle SHA256: 50F79F98DAC192B20DBF73F35C56F0B0C557AB267FF5199D1117CC1180B70785
+License: Mozilla Public License 2.0 (MPL-2.0); see LICENSE.

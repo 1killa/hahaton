@@ -34,6 +34,8 @@ sys.stdout=open($logJson,'w',encoding='utf-8')
 sys.stderr=sys.stdout
 sys.frozen=True
 sys.executable=os.path.join($installJson,'STESlicer.exe')
+sys.argv=[$scriptJson]
+__file__=$scriptJson
 os.chdir($rootJson)
 try:
  exec(compile(open($scriptJson,'rb').read(),$scriptJson,'exec'))

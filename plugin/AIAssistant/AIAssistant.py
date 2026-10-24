@@ -20,9 +20,12 @@ class AIAssistant(Extension):
         self._app = app
         self._server = None
         self._server_thread = None
+        self._native_controller = None
+        self._native_window = None
         self._bridge = MainThreadBridge(app.callLater, owner_thread=threading.current_thread().ident)
         self.setMenuName("STE Assistant")
         self.addMenuItem("Открыть чат и настройки", self.showChat)
+        self.addMenuItem("Открыть чат в STE Slicer", self.showNativeChat)
         self.addMenuItem("Остановить помощника", self.stop)
         preferences = app.getPreferences()
         for key, value in (("base_url", DEFAULT_URL), ("model", DEFAULT_MODEL), ("api_key", "")):
@@ -37,7 +40,7 @@ class AIAssistant(Extension):
         except (AttributeError, RuntimeError):
             pass
 
-    def showChat(self):
+    def _ensureServer(self):
         if self._server is None:
             runtime = os.path.join(Resources.getDataStoragePath(), "ste_assistant")
             output_dir = os.path.join(runtime, "outputs")
@@ -51,9 +54,48 @@ class AIAssistant(Extension):
             self._server_thread = threading.Thread(target=self._server.serve_forever)
             self._server_thread.daemon = True
             self._server_thread.start()
-        QDesktopServices.openUrl(QUrl(self._server.browser_url()))
+        return self._server
+
+    def showChat(self):
+        server = self._ensureServer()
+        QDesktopServices.openUrl(QUrl(server.browser_url()))
+
+    def showNativeChat(self):
+        controller = None
+        try:
+            server = self._ensureServer()
+            if self._native_controller is None:
+                # The browser entry point does not depend on the native UI.
+                from .native import NativeAssistantController
+                controller = NativeAssistantController(server)
+                path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "qml", "AssistantWindow.qml")
+                view = self._app.createQmlComponent(path, {"manager": controller})
+                if view is None:
+                    raise RuntimeError("Не удалось загрузить окно чата. Обновите папку плагина целиком.")
+                controller.bind_view(view)
+                self._native_controller = controller
+                self._native_window = view
+            self._native_controller.show()
+        except Exception as error:
+            if controller is not None and controller is not self._native_controller:
+                controller.dispose()
+            self._showNativeError(error)
+
+    def _showNativeError(self, error):
+        from UM.Message import Message
+        detail = self._config.redact(str(error))
+        if self._server is not None:
+            detail = detail.replace(self._server.token, "[SESSION HIDDEN]")
+        Message("Не удалось открыть чат в STE Slicer: " + detail,
+                title="STE Assistant", lifetime=0).show()
 
     def stop(self):
+        controller = self._native_controller
+        self._native_controller = None
+        self._native_window = None
+        if controller is not None:
+            controller.dispose()
         server = self._server
         if server is None:
             return

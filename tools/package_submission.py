@@ -35,7 +35,7 @@ def main():
             for directory, folders, files in os.walk(os.path.join(root, top)):
                 folders[:] = [name for name in folders if name != "__pycache__"]
                 for filename in sorted(files):
-                    if filename.endswith((".pyc", ".pyo", ".log")):
+                    if filename.endswith((".pyc", ".pyo", ".qmlc", ".jsc", ".log")):
                         continue
                     path = os.path.join(directory, filename)
                     archive.write(path, os.path.relpath(path, root).replace(os.sep, "/"))

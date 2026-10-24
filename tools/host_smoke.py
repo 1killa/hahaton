@@ -52,7 +52,8 @@ registration = plugin_package.register(AppStub())
 extension = registration["extension"]
 assert isinstance(extension, AIAssistant)
 assert extension.getMenuName() == "STE Assistant"
-assert len(extension.getMenuItemList()) == 2
+assert len(extension.getMenuItemList()) == 3
+assert "Открыть чат в STE Slicer" in extension.getMenuItemList()
 print("API-5 registration with native Extension class: PASS (test app context)")
 
 # Exercise the menu callback, not just registration. Keep the native Resources
